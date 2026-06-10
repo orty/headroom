@@ -138,6 +138,40 @@ Schema, for reference: Keychain generic password, service `copilot-cli`
 
 ---
 
+## Containers & CI — no `wrap`, no keychain (bearer passthrough)
+
+`wrap --subscription` needs the host OS secret store, which a container or CI
+runner doesn't have. In those environments you don't need `wrap` at all: run
+`headroom proxy` directly and let the proxy forward the **bearer token your
+Copilot client already sends**. When no token is configured on the proxy side
+(no `GITHUB_COPILOT_TOKEN` / `GITHUB_COPILOT_API_TOKEN` env var and nothing
+discoverable in a secret store), the proxy passes the inbound
+`Authorization: Bearer <token>` header through to GitHub's Copilot API
+unchanged — the same way the Anthropic handler forwards inbound bearer
+credentials.
+
+```bash
+# inside the container / CI job:
+headroom proxy &                                      # no token env vars needed
+export COPILOT_PROVIDER_API_URL=http://localhost:8787  # point the CLI at the proxy
+copilot --model gpt-4o -p "Reply with exactly: HEADROOM_OK"
+```
+
+Precedence and overrides:
+
+- A token configured on the proxy (`GITHUB_COPILOT_TOKEN`,
+  `GITHUB_COPILOT_API_TOKEN`, or anything the secret-store discovery finds)
+  **always wins**; the inbound header is only used when nothing is configured
+  locally. Setting `GITHUB_COPILOT_TOKEN` as a Docker env var therefore keeps
+  working exactly as before.
+- `GITHUB_COPILOT_API_URL` (enterprise / data-residency hosts, see
+  [above](#api-host--enterprise--data-residency)) applies regardless of where
+  the token came from.
+- If neither a configured token nor an inbound bearer header is present, the
+  request fails with an error naming both options.
+
+---
+
 ## What to report
 
 Please open a

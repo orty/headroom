@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -442,6 +443,119 @@ def test_exchange_token_sync_raises_for_http_error(monkeypatch: pytest.MonkeyPat
 
     with pytest.raises(RuntimeError, match="HTTP 404"):
         copilot_auth.CopilotTokenProvider._exchange_token_sync({"Authorization": "token test"})
+
+
+def _force_no_local_copilot_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make local token resolution fail: no env vars, no discoverable OAuth token."""
+
+    monkeypatch.delenv("GITHUB_COPILOT_API_TOKEN", raising=False)
+    monkeypatch.setattr(copilot_auth, "_provider", copilot_auth.CopilotTokenProvider())
+    monkeypatch.setattr(copilot_auth, "read_cached_oauth_token", lambda: None)
+
+
+def test_apply_copilot_api_auth_falls_back_to_inbound_bearer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _force_no_local_copilot_token(monkeypatch)
+
+    headers = asyncio.run(
+        copilot_auth.apply_copilot_api_auth(
+            {
+                "authorization": "Bearer client-token",
+                "user-agent": "GitHubCopilotChat/0.1",
+            },
+            url="https://api.githubcopilot.com/chat/completions",
+        )
+    )
+
+    assert headers["authorization"] == "Bearer client-token"
+    assert headers["user-agent"] == "GitHubCopilotChat/0.1"
+
+
+def test_apply_copilot_api_auth_env_token_wins_over_inbound_bearer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_COPILOT_API_TOKEN", "copilot-env")
+
+    headers = asyncio.run(
+        copilot_auth.apply_copilot_api_auth(
+            {"authorization": "Bearer client-token"},
+            url="https://api.githubcopilot.com/chat/completions",
+        )
+    )
+
+    assert headers["Authorization"] == "Bearer copilot-env"
+    assert "authorization" not in headers
+
+
+def test_apply_copilot_api_auth_raises_when_no_token_anywhere(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _force_no_local_copilot_token(monkeypatch)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        asyncio.run(
+            copilot_auth.apply_copilot_api_auth(
+                {},
+                url="https://api.githubcopilot.com/chat/completions",
+            )
+        )
+
+    message = str(excinfo.value)
+    assert "GITHUB_COPILOT_TOKEN" in message
+    assert "Authorization" in message
+
+
+def test_apply_copilot_api_auth_ignores_non_bearer_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _force_no_local_copilot_token(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="GITHUB_COPILOT_TOKEN"):
+        asyncio.run(
+            copilot_auth.apply_copilot_api_auth(
+                {"authorization": "Basic dXNlcjpwYXNz"},
+                url="https://api.githubcopilot.com/chat/completions",
+            )
+        )
+
+
+def test_apply_copilot_api_auth_inbound_bearer_composes_with_ghe_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _force_no_local_copilot_token(monkeypatch)
+    monkeypatch.setenv("GITHUB_COPILOT_API_URL", "https://api.business.githubcopilot.com")
+
+    upstream = copilot_auth.build_copilot_upstream_url(
+        copilot_auth.resolve_copilot_api_url(), "/v1/chat/completions"
+    )
+    assert upstream == "https://api.business.githubcopilot.com/chat/completions"
+
+    headers = asyncio.run(
+        copilot_auth.apply_copilot_api_auth(
+            {"authorization": "Bearer client-token"},
+            url=upstream,
+        )
+    )
+
+    assert headers["authorization"] == "Bearer client-token"
+
+
+def test_apply_copilot_api_auth_never_logs_inbound_token(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _force_no_local_copilot_token(monkeypatch)
+
+    with caplog.at_level(logging.DEBUG, logger="headroom.copilot_auth"):
+        asyncio.run(
+            copilot_auth.apply_copilot_api_auth(
+                {"authorization": "Bearer s3cr3t-inbound-token"},
+                url="https://api.githubcopilot.com/chat/completions",
+            )
+        )
+
+    assert "s3cr3t-inbound-token" not in caplog.text
 
 
 def test_apply_copilot_api_auth_returns_original_headers_for_non_copilot_url() -> None:

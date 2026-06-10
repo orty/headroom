@@ -54,6 +54,14 @@ _OAUTH_TOKEN_KEYS = (
 _EXPIRY_KEYS = ("expires_at", "expiresAt", "expiry", "expires")
 
 
+class CopilotTokenUnavailableError(RuntimeError):
+    """No reusable Copilot token could be discovered in the local environment.
+
+    Distinct from other auth failures (e.g. a failed token exchange) so callers
+    can fall back to credentials carried on the inbound request.
+    """
+
+
 @dataclass(frozen=True)
 class CopilotAPIToken:
     """Short-lived API token exchanged from a GitHub OAuth token."""
@@ -547,7 +555,7 @@ class CopilotTokenProvider:
 
             oauth_token = read_cached_oauth_token()
             if not oauth_token:
-                raise RuntimeError("No GitHub Copilot OAuth token is available.")
+                raise CopilotTokenUnavailableError("No GitHub Copilot OAuth token is available.")
 
             if not _should_exchange_oauth_token():
                 direct_token = CopilotAPIToken(
@@ -617,14 +625,46 @@ def get_copilot_token_provider() -> CopilotTokenProvider:
     return _provider
 
 
+def _has_inbound_bearer_token(headers: dict[str, str]) -> bool:
+    """Return True when the inbound request already carries a non-empty bearer token."""
+
+    for key, value in headers.items():
+        if key.lower() == "authorization" and value.startswith("Bearer ") and value[7:].strip():
+            return True
+    return False
+
+
 async def apply_copilot_api_auth(headers: dict[str, str], *, url: str) -> dict[str, str]:
-    """Replace Authorization with a fresh Copilot API token when targeting Copilot."""
+    """Replace Authorization with a fresh Copilot API token when targeting Copilot.
+
+    A locally configured token (env var or OS secret store) always wins. When no
+    local token is discoverable — containers and CI have no host keychain — the
+    bearer token the client already sent is forwarded unchanged, mirroring how
+    the Anthropic handler passes inbound bearer credentials upstream (#200).
+    """
 
     resolved = dict(headers)
     if not is_copilot_api_url(url):
         return resolved
 
-    token = await get_copilot_token_provider().get_api_token()
+    try:
+        token = await get_copilot_token_provider().get_api_token()
+    except CopilotTokenUnavailableError:
+        if _has_inbound_bearer_token(resolved):
+            logger.debug(
+                "No local Copilot token configured; forwarding the inbound bearer token upstream"
+            )
+            return resolved
+        logger.warning(
+            "Copilot request rejected: no GITHUB_COPILOT_TOKEN in the proxy "
+            "environment and no Authorization bearer header on the inbound request"
+        )
+        raise CopilotTokenUnavailableError(
+            "No GitHub Copilot token available. Set GITHUB_COPILOT_TOKEN (or "
+            "GITHUB_COPILOT_API_TOKEN) in the proxy environment, or send the "
+            "request with an 'Authorization: Bearer <token>' header."
+        ) from None
+
     for key in list(resolved):
         if key.lower() == "authorization":
             resolved.pop(key)

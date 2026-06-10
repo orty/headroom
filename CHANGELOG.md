@@ -56,6 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Bug Fixes
 
 
+* **copilot:** forward the inbound `Authorization: Bearer` token to `api.githubcopilot.com` when no Copilot token is configured on the proxy (env var or OS secret store). Lets `headroom proxy` work in containers and CI, where `wrap --subscription` can't reach the host keychain, with the credential the Copilot client already sends. A locally configured token still takes precedence, `GITHUB_COPILOT_API_URL` host overrides apply to both token sources, and a request with no token in either place now fails with an error naming both options. Mirrors the inbound-bearer handling of the Anthropic handler ([#200](https://github.com/chopratejas/headroom/issues/200)). Affected file: `headroom/copilot_auth.py`.
 * **deps:** move `gunicorn` to `[proxy-prod]` extra with `sys_platform != 'win32'` guard; removed from `[proxy]` to avoid forcing a Unix-only package on dev, CI, and Windows users ([#537](https://github.com/chopratejas/headroom/pull/537))
 * **startup:** suppress proxy startup log noise — litellm banner, trafilatura parse errors, HuggingFace Hub unauthenticated warnings, tiktoken fallback warning, and httpx INFO lines from sentence_transformers HEAD checks. Affected files: `headroom/providers/litellm.py`, `headroom/transforms/html_extractor.py`, `headroom/memory/adapters/embedders.py`, `headroom/providers/anthropic.py`, `headroom/providers/registry.py`, `headroom/image/onnx_router.py`, `headroom/transforms/kompress_compressor.py`.
 
