@@ -152,7 +152,8 @@ credentials.
 
 ```bash
 # inside the container / CI job:
-headroom proxy &                                      # no token env vars needed
+export OPENAI_TARGET_API_URL=https://api.githubcopilot.com  # proxy's upstream (wrap sets this for you; bare proxy needs it explicitly)
+headroom proxy &                                       # no token env vars needed
 export COPILOT_PROVIDER_API_URL=http://localhost:8787  # point the CLI at the proxy
 copilot --model gpt-4o -p "Reply with exactly: HEADROOM_OK"
 ```
@@ -164,9 +165,12 @@ Precedence and overrides:
   **always wins**; the inbound header is only used when nothing is configured
   locally. Setting `GITHUB_COPILOT_TOKEN` as a Docker env var therefore keeps
   working exactly as before.
-- `GITHUB_COPILOT_API_URL` (enterprise / data-residency hosts, see
-  [above](#api-host--enterprise--data-residency)) applies regardless of where
-  the token came from.
+- For enterprise / data-residency hosts (see
+  [above](#api-host--enterprise--data-residency)), point
+  `OPENAI_TARGET_API_URL` at your dedicated host instead — without `wrap`
+  there is no step that translates `GITHUB_COPILOT_API_URL` into the proxy's
+  upstream target, so the host must be set explicitly here. It applies
+  regardless of where the token came from.
 - If neither a configured token nor an inbound bearer header is present, the
   request fails with an error naming both options.
 
