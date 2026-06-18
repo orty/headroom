@@ -30,6 +30,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **wrap (codex):** fix `headroom wrap codex` producing a `config.toml` with duplicate top-level `model_provider` / `openai_base_url` keys (TOML-spec error) when the user had already configured their own provider. The injector now rewrites pre-existing top-level `model_provider` and `openai_base_url` lines in place — the previous value is kept in a `# was: …` trailing comment — instead of unconditionally prepending a duplicate, so `codex` can start against the proxy. The pre-wrap snapshot mechanism continues to byte-for-byte restore the original file on `headroom unwrap codex`.
 
 
+## [0.27.0](https://github.com/orty/headroom/compare/v0.26.0...v0.27.0) (2026-06-18)
+
+
+### Features
+
+* **ci:** deploy to Azure Container Apps on release published ([208c147](https://github.com/orty/headroom/commit/208c1475e32aa2276cfa036260dffb02ade5bc58))
+* **ci:** scheduled sync from main into main-alpha ([31e8ddf](https://github.com/orty/headroom/commit/31e8ddfcd933e3feb2bd0bc0d75a15c43319e692))
+* **cli:** add headroom update command and release banner ([#1088](https://github.com/orty/headroom/issues/1088)) ([26be2c3](https://github.com/orty/headroom/commit/26be2c39cb8a3c23edc08516f01cf91fad33c117))
+* **policy:** decay P_alive from idle time near cache TTL ([#856](https://github.com/orty/headroom/issues/856) P3b) ([#1028](https://github.com/orty/headroom/issues/1028)) ([fe4f9ee](https://github.com/orty/headroom/commit/fe4f9ee478f50a84190a2d44de2b9fbf24272acf))
+* **proxy:** hot-reload live env knobs so a reused proxy picks them up without a restart ([#1090](https://github.com/orty/headroom/issues/1090)) ([6904d47](https://github.com/orty/headroom/commit/6904d47a01e7be496e21d8ebcf34739db5c3b7dd))
+
+
+### Bug Fixes
+
+* **ci:** deploy after Release workflow completes, not on release published ([adcbe19](https://github.com/orty/headroom/commit/adcbe190542da0d88a7dcc0f3df27abf332784ef))
+* **ci:** deploy fork image for pre-releases, upstream image for stable ([f0d5541](https://github.com/orty/headroom/commit/f0d5541bf47b07b464c5d23c7b5308ef67e7fad4))
+* **ci:** mirror triggers on main-alpha push ([568d1fc](https://github.com/orty/headroom/commit/568d1fc76923ae42d076570f51ffa589789e88fc))
+* **ci:** retarget ci.yml to main-alpha ([10b9729](https://github.com/orty/headroom/commit/10b9729acda49a04aabed1663fd40052adc8c06b))
+* **ci:** retarget devcontainers.yml to main-alpha ([1e4efaf](https://github.com/orty/headroom/commit/1e4efaf3d9e77609714b8f4ab8d00d7a4a68aa81))
+* **ci:** retarget docker.yml to main-alpha ([cd9645b](https://github.com/orty/headroom/commit/cd9645b6bebeba4d4a7de39ead396267597959c2))
+* **ci:** retarget docs.yml to main-alpha ([5495538](https://github.com/orty/headroom/commit/5495538055b57426878c8d687dab85d674e5cf34))
+* **ci:** retarget init-e2e.yml to main-alpha ([bd15eec](https://github.com/orty/headroom/commit/bd15eecc78f13117ee3273e604c6e537caa29177))
+* **ci:** retarget init-native-e2e.yml to main-alpha ([ba1144d](https://github.com/orty/headroom/commit/ba1144d61d7bed4a6bdeac5e88027de12baf9e54))
+* **ci:** retarget install-native-e2e.yml to main-alpha ([de804a7](https://github.com/orty/headroom/commit/de804a7053c9b80117c19cbfc0abc4eb48b0a00f))
+* **ci:** retarget release-please.yml to main-alpha ([623092e](https://github.com/orty/headroom/commit/623092e8d4b6a4dd0bf82f60c132dd175d962762))
+* **ci:** retarget rust.yml to main-alpha ([fc91727](https://github.com/orty/headroom/commit/fc91727f487eedee300cb1ab929606626dbe0713))
+* **ci:** retarget wrap-e2e.yml to main-alpha ([2706fd8](https://github.com/orty/headroom/commit/2706fd8485925f5c56090a06b35a1913bfb3e96f))
+* **ci:** retarget wrap-native-e2e.yml to main-alpha ([719be35](https://github.com/orty/headroom/commit/719be355381f233a607703f030f04870cab5de13))
+* **ci:** tolerate concurrent-run 422 in mirror workflow ([0009285](https://github.com/orty/headroom/commit/0009285fcec48912c8df79b7ba5b41332ce7abfc))
+* **docker:** persist session history across container revisions ([d2bfa18](https://github.com/orty/headroom/commit/d2bfa181a391503aa88e6d852e1fa1d46786d277))
+* extend SemVer and release tag regexes to accept pre-release identifiers ([fa9cbcb](https://github.com/orty/headroom/commit/fa9cbcbcaa0a0d7fbb5df6e72b0047fba6a06b87))
+* **providers:** update DeepSeek V3 context limit from 128K to 1M ([#1038](https://github.com/orty/headroom/issues/1038)) ([#1137](https://github.com/orty/headroom/issues/1137)) ([bcabc5c](https://github.com/orty/headroom/commit/bcabc5cb11c7c411ed29dac1fcc3771833ac8524))
+* **release:** accept SemVer pre-release identifiers in version parsing ([6587d82](https://github.com/orty/headroom/commit/6587d82fc24133887b7a95334cb8b30cfe632d17))
+* **wrap:** percent-encode non-ASCII cwd names in X-Headroom-Project header ([#1071](https://github.com/orty/headroom/issues/1071)) ([9f712cc](https://github.com/orty/headroom/commit/9f712ccbd7ec27b74f6ac7f20b7d2a9743dba1d8))
+* **wrap:** write env.ANTHROPIC_BASE_URL to settings.json so daemon-spawned conversations inherit proxy ([#951](https://github.com/orty/headroom/issues/951)) ([#1078](https://github.com/orty/headroom/issues/1078)) ([a554c3a](https://github.com/orty/headroom/commit/a554c3a0e6c5c57a7c745d8648024362d9d502a4))
+
 ## [0.26.0](https://github.com/chopratejas/headroom/compare/v0.25.0...v0.26.0) (2026-06-16)
 
 
