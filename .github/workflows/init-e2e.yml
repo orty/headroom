@@ -2,7 +2,7 @@ name: Init E2E
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main-alpha]
     paths:
       - 'headroom/**'
       - 'crates/**'
@@ -20,7 +20,7 @@ on:
       - 'plugins/headroom-agent-hooks/**'
       - '.github/workflows/init-e2e.yml'
   push:
-    branches: [main]
+    branches: [main-alpha]
   workflow_dispatch:
 
 concurrency:
