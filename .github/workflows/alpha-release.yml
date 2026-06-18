@@ -1,0 +1,111 @@
+name: Alpha Release
+
+# Cuts a fork pre-release on every push to main-alpha that carries fork
+# customizations (i.e. the working tree differs from origin/main, which Pull
+# keeps in sync with upstream chopratejas/headroom).
+#
+# Version scheme: vX.Y.(Z+1)-alpha.N, where vX.Y.Z is the latest STABLE
+# (upstream-mirrored) release tag. N increments per release and resets when
+# upstream ships a new version (the stable base moves up). Examples:
+#   upstream v0.26.0 + fork patches -> v0.26.1-alpha.1, v0.26.1-alpha.2, ...
+#   upstream then ships v0.27.0     -> v0.27.1-alpha.1, ...
+# These sort after the upstream release and before the next patch, and are
+# superseded once upstream absorbs the change.
+#
+# Pure-upstream states (no fork delta) are skipped — mirror-upstream-release.yml
+# publishes those with the exact upstream tag instead.
+#
+# The release is created with FORK_RELEASE_PAT (NOT GITHUB_TOKEN) so the
+# `release: published` event fires release.yml -> docker.yml. Releases created
+# with GITHUB_TOKEN are suppressed by GitHub and would never build a Docker
+# image. The PAT is a fine-grained token scoped to this repo with
+# Contents: Read and write (shared with mirror-upstream-release.yml).
+
+on:
+  push:
+    branches: [main-alpha]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Serialize so two quick pushes don't compute the same alpha.N and collide.
+  group: alpha-release
+  cancel-in-progress: false
+
+jobs:
+  alpha:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main-alpha
+          fetch-depth: 0
+          token: ${{ secrets.FORK_RELEASE_PAT }}
+
+      - name: Cut alpha pre-release
+        env:
+          GH_TOKEN: ${{ secrets.FORK_RELEASE_PAT }}
+        run: |
+          set -euo pipefail
+          # The checkout above used fetch-depth: 0, so origin/main and all tags
+          # are already present — no extra fetch needed.
+
+          # Skip if main-alpha carries no fork delta (tree identical to the
+          # upstream-synced main). The mirror workflow handles pure-upstream.
+          if git diff --quiet origin/main HEAD; then
+            echo "main-alpha tree == origin/main; no fork changes — skipping."
+            exit 0
+          fi
+
+          # Skip if HEAD is already released (e.g. workflow re-run / no-op push).
+          if git tag --points-at HEAD | grep -qE '^v[0-9]'; then
+            echo "HEAD already has a release tag — skipping."
+            exit 0
+          fi
+
+          # base = upstream's latest STABLE release version, queried DIRECTLY
+          # from upstream. This is the only race-free, accurate source:
+          #   - the fork's mirrored stable *tags* race with mirror-upstream-
+          #     release.yml, which pushes the new upstream tag in parallel on
+          #     this same push (so a concurrent upstream bump would compute the
+          #     alpha off the previous version);
+          #   - pyproject.toml can drift from upstream via fork-local edits.
+          UPSTREAM="chopratejas/headroom"
+          base="$(gh release list --repo "$UPSTREAM" --limit 30 \
+            --json tagName,isPrerelease,isDraft \
+            -q '.[] | select(.isPrerelease == false and .isDraft == false) | .tagName' \
+            | sort -V | tail -1)"
+          base="${base#v}"
+          if ! echo "$base" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::could not resolve upstream latest stable version (got '${base}')"
+            exit 1
+          fi
+
+          IFS='.' read -r major minor patch <<< "$base"
+          target="${major}.${minor}.$((patch + 1))"
+
+          # N = highest existing vTARGET-alpha.<N> + 1
+          last="$(git tag -l "v${target}-alpha.*" \
+            | sed -E "s/^v${target}-alpha\.//" \
+            | grep -E '^[0-9]+$' \
+            | sort -n \
+            | tail -1 || true)"
+          n=$(( ${last:-0} + 1 ))
+          newtag="v${target}-alpha.${n}"
+
+          echo "Cutting ${newtag} (stable base v${base}) at ${GITHUB_SHA}"
+
+          # Single-line printf (not a multi-line literal): inside a YAML `run`
+          # block a multi-line string would carry the block's indentation into
+          # the release-notes body.
+          notes="$(printf '## %s (fork pre-release)\n\nUpstream **v%s** + fork customizations on top.\n\n_Sorts after v%s and before any future v%s; superseded once upstream ships v%s._' \
+            "$newtag" "$base" "$base" "$target" "$target")"
+
+          gh release create "$newtag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Release ${newtag}" \
+            --notes "$notes" \
+            --prerelease

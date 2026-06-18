@@ -1,8 +1,6 @@
 name: Docker
 
 on:
-  push:
-    branches: [main-alpha]
   workflow_call:
     inputs:
       version:
@@ -19,8 +17,12 @@ on:
       version:
         description: "Version to stamp into the image contents and exact image tag"
         required: false
-  release:
-    types: [published]
+  # NOTE: no `push` or `release` trigger. Every push to main-alpha already cuts
+  # a versioned build via alpha-release.yml / mirror-upstream-release.yml ->
+  # release.yml -> publish-docker (workflow_call), so a direct push trigger
+  # would just rebuild the same matrix a second time (and only for the unused
+  # rolling `:dev` tag). Image builds come exclusively through workflow_call,
+  # and deploy-to-aca chains off the single "Release" workflow run.
 
 env:
   REGISTRY: ghcr.io
@@ -282,7 +284,6 @@ jobs:
           tags: |
             type=ref,event=branch,enable=${{ inputs.enable_ref_tags != 'false' && github.event_name != 'release' }},suffix=${{ matrix.variant.name != '' && format('-{0}', matrix.variant.name) || '' }}
             type=ref,event=pr,enable=${{ inputs.enable_ref_tags != 'false' && github.event_name != 'release' }},suffix=${{ matrix.variant.name != '' && format('-{0}', matrix.variant.name) || '' }}
-            type=raw,value=dev,enable=${{ inputs.enable_ref_tags != 'false' && github.event_name == 'push' }},suffix=${{ matrix.variant.name != '' && format('-{0}', matrix.variant.name) || '' }}
             type=raw,value=${{ steps.version.outputs.version }},enable=${{ steps.version.outputs.version != '' }},suffix=${{ matrix.variant.name != '' && format('-{0}', matrix.variant.name) || '' }}
             type=raw,value=${{ steps.version.outputs.version }}-${{ steps.short-sha.outputs.sha }},enable=${{ steps.version.outputs.version != '' && matrix.variant.name == '' }}
             type=raw,value=${{ steps.version.outputs.version }}-${{ matrix.variant.name }}-${{ steps.short-sha.outputs.sha }},enable=${{ steps.version.outputs.version != '' && matrix.variant.name != '' }}

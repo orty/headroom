@@ -1,16 +1,27 @@
 name: Sync main-alpha from main
 
-# Runs hourly and on demand. Fetches origin/main (kept clean with upstream
-# via Pull app) and merges it into main-alpha, triggering the release mirror
-# and ACA deploy cascade automatically.
+# Fires as soon as Pull updates `main` from upstream (chopratejas:main), then
+# merges `main` into `main-alpha`. The push to main-alpha is authenticated with
+# an SSH deploy key (secret SYNC_DEPLOY_KEY) rather than GITHUB_TOKEN, so the
+# resulting push event DOES trigger the downstream workflows (alpha-release,
+# mirror-upstream-release, ci, docker, ...). Pushes made with the default
+# GITHUB_TOKEN are deliberately suppressed by GitHub and would not fire any of
+# them, leaving the publish cascade stalled.
+#
+# Setup (one-time):
+#   1. ssh-keygen -t ed25519 -f sync_deploy_key -N "" -C "sync-main-alpha"
+#   2. Repo Settings -> Deploy keys -> Add deploy key
+#        - paste sync_deploy_key.pub, tick "Allow write access"
+#   3. Repo Settings -> Secrets and variables -> Actions -> New secret
+#        - name: SYNC_DEPLOY_KEY, value: contents of the private sync_deploy_key
 
 on:
-  schedule:
-    - cron: '7 * * * *'   # hourly at :07, offset from peak
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   sync:
@@ -20,7 +31,8 @@ jobs:
         with:
           ref: main-alpha
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # Deploy key (not GITHUB_TOKEN) so the push below triggers CI/CD.
+          ssh-key: ${{ secrets.SYNC_DEPLOY_KEY }}
 
       - name: Merge main into main-alpha
         run: |
