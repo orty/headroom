@@ -42,16 +42,44 @@ jobs:
     steps:
       - name: Resolve image
         id: image
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
+
+          # An explicit tag from a manual dispatch wins.
+          TAG=""
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             TAG="${{ inputs.tag }}"
-            [ -z "$TAG" ] && TAG="latest"
-          else
-            # workflow_run: head_branch holds the tag name for release-triggered runs
-            TAG="${{ github.event.workflow_run.head_branch }}"
           fi
 
-          if echo "$TAG" | grep -qE '\-alpha|\-beta|\-rc'; then
+          # Otherwise resolve from the releases list. The triggering tag is NOT
+          # in the workflow_run payload, and the run's head-branch field is the
+          # *branch* (main-alpha) — which contains "-alpha" and mis-routes to the
+          # dev image (the bug that made /readyz report 0.26.0). `gh release view`
+          # ignores pre-releases (fork builds are -alpha), so that won't help.
+          #
+          # Pick the HIGHEST-SEMVER non-draft release, NOT the most recent by
+          # time: an upstream bump cuts both a stable mirror (vX.Y.Z) and a fork
+          # alpha (vX.Y.(Z+1)-alpha.N) on the same push, and they publish in a
+          # non-deterministic order. The alpha is always the higher version, so
+          # selecting by version guarantees ACA converges on the customized alpha
+          # image rather than the bare upstream stable.
+          if [ -z "$TAG" ]; then
+            TAG="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 50 \
+              --json tagName,isDraft \
+              -q '.[] | select(.isDraft == false) | .tagName' | sort -V | tail -1)"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::could not resolve a release tag to deploy"
+            exit 1
+          fi
+
+          # Published image tags drop the leading "v" (docker.yml strips it),
+          # so normalize before building the pull reference.
+          TAG="${TAG#v}"
+
+          if echo "$TAG" | grep -qE -- '-alpha|-beta|-rc'; then
             echo "image=${FORK_IMAGE}:${TAG}" >> "$GITHUB_OUTPUT"
           else
             echo "image=${UPSTREAM_IMAGE}:${TAG}" >> "$GITHUB_OUTPUT"
