@@ -7,7 +7,7 @@ name: Install Native E2E
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main-alpha]
     paths:
       - "headroom/cli/install.py"
       - "headroom/install/**"
@@ -16,7 +16,7 @@ on:
       - ".github/actions/headroom-e2e-setup/**"
       - ".github/workflows/install-native-e2e.yml"
   push:
-    branches: [main]
+    branches: [main-alpha]
   workflow_dispatch:
 
 permissions:
