@@ -1,0 +1,61 @@
+name: Mirror Upstream Releases
+
+on:
+  schedule:
+    - cron: '17 * * * *'   # hourly, off-peak minute
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Mirror tags and releases from upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM: chopratejas/headroom
+          FORK: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          git remote add upstream "https://github.com/${UPSTREAM}.git"
+          git fetch upstream --tags --force
+
+          # Push all upstream tags to fork; existing tags are no-ops
+          git push origin --tags 2>/dev/null || true
+
+          # Mirror each published upstream release missing from fork
+          gh api "repos/${UPSTREAM}/releases?per_page=30" \
+            --paginate \
+            --jq '.[] | select(.draft == false) | {tag: .tag_name, name: .name, body: .body, prerelease: .prerelease}' \
+          | while IFS= read -r release; do
+            tag=$(echo "$release" | jq -r '.tag')
+
+            if gh api "repos/${FORK}/releases/tags/${tag}" &>/dev/null; then
+              echo "✓ ${tag} already mirrored"
+              continue
+            fi
+
+            echo "$release" | jq -r '.body // ""' > /tmp/release_notes.md
+
+            name=$(echo "$release"  | jq -r '.name // .tag')
+            prerelease=$(echo "$release" | jq -r '.prerelease')
+
+            flags=()
+            [ "${prerelease}" = "true" ] && flags+=(--prerelease)
+
+            gh release create "${tag}" \
+              --repo "${FORK}" \
+              --title "${name}" \
+              --notes-file /tmp/release_notes.md \
+              "${flags[@]}"
+
+            echo "✓ Mirrored ${tag}"
+          done
