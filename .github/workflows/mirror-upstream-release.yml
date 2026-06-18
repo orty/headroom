@@ -31,7 +31,8 @@ jobs:
           # Push all upstream tags to fork; existing tags are no-ops
           git push origin --tags 2>/dev/null || true
 
-          # Mirror each published upstream release missing from fork
+          # Mirror each published upstream release missing from fork.
+          # Tolerate HTTP 422 "already exists" from concurrent runs.
           gh api "repos/${UPSTREAM}/releases?per_page=30" \
             --paginate \
             --jq '.[] | select(.draft == false) | {tag: .tag_name, name: .name, body: .body, prerelease: .prerelease}' \
@@ -44,18 +45,21 @@ jobs:
             fi
 
             echo "$release" | jq -r '.body // ""' > /tmp/release_notes.md
-
-            name=$(echo "$release"  | jq -r '.name // .tag')
+            name=$(echo "$release" | jq -r '.name // .tag')
             prerelease=$(echo "$release" | jq -r '.prerelease')
 
             flags=()
             [ "${prerelease}" = "true" ] && flags+=(--prerelease)
 
-            gh release create "${tag}" \
+            if output=$(gh release create "${tag}" \
               --repo "${FORK}" \
               --title "${name}" \
               --notes-file /tmp/release_notes.md \
-              "${flags[@]}"
-
-            echo "✓ Mirrored ${tag}"
+              "${flags[@]}" 2>&1); then
+              echo "✓ Mirrored ${tag}"
+            elif echo "$output" | grep -qi "already.exist"; then
+              echo "⚠ ${tag} created by concurrent run, skipping"
+            else
+              echo "✗ Failed to mirror ${tag}: $output" && exit 1
+            fi
           done
