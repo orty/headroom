@@ -2,14 +2,14 @@ name: Dev Containers
 
 on:
   push:
-    branches: [main]
+    branches: [main-alpha]
     paths:
       - ".devcontainer/**"
       - ".github/workflows/devcontainers.yml"
       - "pyproject.toml"
       - "uv.lock"
   pull_request:
-    branches: [main]
+    branches: [main-alpha]
     paths:
       - ".devcontainer/**"
       - ".github/workflows/devcontainers.yml"
