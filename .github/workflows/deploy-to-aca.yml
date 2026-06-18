@@ -1,26 +1,23 @@
 name: Deploy to Azure Container Apps
 
-# Release routing:
-# - Fork pre-release (v0.26.1-alpha.2): deploys ghcr.io/orty/headroom:<tag>
-#   (built and pushed by release.yml during the release run)
-# - Mirrored stable release (v0.26.0): deploys ghcr.io/chopratejas/headroom:v0.26.0
-#   (upstream image; fork doesn't rebuild stable releases)
+# Triggers AFTER the Release workflow completes successfully (not on release
+# published directly) so the Docker image is guaranteed to exist.
 #
-# Deploy fires AFTER release is published — release.yml builds the image first,
-# then the release event triggers this workflow.
+# Image routing:
+# - Fork pre-release tag (contains -alpha/-beta/-rc): ghcr.io/orty/headroom:<tag>
+# - Stable mirrored tag (e.g. v0.26.0): ghcr.io/chopratejas/headroom:<tag>
 #
-# REQUIRED SECRETS (Settings → Secrets → Actions):
-#   AZURE_CLIENT_ID        — App registration client ID (github-headroom-deploy SP)
-#   AZURE_TENANT_ID        — powell-software.com tenant: dd4397fc-...
-#   AZURE_SUBSCRIPTION_ID  — a2672c72-a1eb-4c84-aec5-0b01fc14696f
+# REQUIRED SECRETS:
+#   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
 
 on:
-  release:
-    types: [published]
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Image tag to deploy (empty = latest)'
+        description: 'Image tag to deploy (empty = latest fork image)'
         required: false
         default: ''
 
@@ -36,6 +33,10 @@ env:
 
 jobs:
   deploy:
+    # Only deploy when Release workflow succeeded (or manual dispatch)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -45,16 +46,17 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             TAG="${{ inputs.tag }}"
             [ -z "$TAG" ] && TAG="latest"
-            echo "image=${FORK_IMAGE}:${TAG}" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event.release.prerelease }}" = "true" ]; then
-            # Fork pre-release: use the image built by release.yml for this tag
-            TAG="${{ github.event.release.tag_name }}"
+          else
+            # workflow_run: head_branch holds the tag name for release-triggered runs
+            TAG="${{ github.event.workflow_run.head_branch }}"
+          fi
+
+          if echo "$TAG" | grep -qE '\-alpha|\-beta|\-rc'; then
             echo "image=${FORK_IMAGE}:${TAG}" >> "$GITHUB_OUTPUT"
           else
-            # Mirrored stable release: use upstream image (fork doesn't rebuild)
-            TAG="${{ github.event.release.tag_name }}"
             echo "image=${UPSTREAM_IMAGE}:${TAG}" >> "$GITHUB_OUTPUT"
           fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Azure Login (OIDC)
         uses: azure/login@v2
@@ -66,8 +68,9 @@ jobs:
       - name: Update Container App
         run: |
           IMAGE="${{ steps.image.outputs.image }}"
-          TAG_SLUG=$(echo "${IMAGE##*:}" | tr -cd 'a-z0-9' | cut -c1-5)
-          EPOCH_TAIL=$(date +%s | rev | cut -c1-5)
+          TAG="${{ steps.image.outputs.tag }}"
+          TAG_SLUG=$(echo "${TAG}" | tr -cd 'a-z0-9' | cut -c1-5)
+          EPOCH_TAIL=$(date +%s | tail -c 6)
           SUFFIX="${TAG_SLUG}${EPOCH_TAIL}"
 
           az containerapp update \
