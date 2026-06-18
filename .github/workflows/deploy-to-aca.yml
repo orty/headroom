@@ -1,0 +1,92 @@
+name: Deploy to Azure Container Apps
+
+# Triggers on any published release (mirrored from upstream or fork pre-release).
+# - Stable release (v0.26.0): deploys ghcr.io/chopratejas/headroom:v0.26.0
+# - Fork pre-release (v0.26.1-alpha.1): deploys :latest (no dedicated image exists)
+#
+# REQUIRED SECRETS (Settings → Secrets → Actions):
+#   AZURE_CLIENT_ID        — App registration / managed identity client ID
+#   AZURE_TENANT_ID        — powell-software.com tenant ID
+#   AZURE_SUBSCRIPTION_ID  — a2672c72-a1eb-4c84-aec5-0b01fc14696f
+#
+# ONE-TIME AZURE SETUP (run once, then secrets above unlock the workflow):
+#   # Create service principal with Contributor on the Container App
+#   az ad sp create-for-rbac \
+#     --name "github-headroom-deploy" \
+#     --role Contributor \
+#     --scopes /subscriptions/a2672c72-a1eb-4c84-aec5-0b01fc14696f/resourceGroups/RG-SAR/providers/Microsoft.App/containerApps/headroom \
+#     --sdk-auth
+#   # Note the clientId, tenantId — add them as repo secrets.
+#   # Then add a Federated Identity Credential to the app registration:
+#   az ad app federated-credential create \
+#     --id <CLIENT_ID> \
+#     --parameters '{
+#       "name": "github-headroom",
+#       "issuer": "https://token.actions.githubusercontent.com",
+#       "subject": "repo:orty/headroom:environment:production",
+#       "audiences": ["api://AzureADTokenExchange"]
+#     }'
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag to deploy (empty = latest)'
+        required: false
+        default: ''
+
+permissions:
+  id-token: write   # required for OIDC Azure login
+  contents: read
+
+env:
+  ACA_NAME: headroom
+  ACA_RG: RG-SAR
+  IMAGE_BASE: ghcr.io/chopratejas/headroom
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Resolve image tag
+        id: image
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+            [ -z "$TAG" ] && TAG="latest"
+          elif [ "${{ github.event.release.prerelease }}" = "true" ]; then
+            # Fork pre-releases have no dedicated Docker image; deploy :latest
+            TAG="latest"
+          else
+            TAG="${{ github.event.release.tag_name }}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Update Container App image
+        run: |
+          TAG="${{ steps.image.outputs.tag }}"
+          IMAGE="${IMAGE_BASE}:${TAG}"
+
+          # Unique revision suffix ensures a new revision is created even for
+          # :latest (otherwise ACA reuses the existing revision unchanged).
+          TAG_SLUG=$(echo "${TAG}" | tr -cd 'a-z0-9' | cut -c1-5)
+          EPOCH_TAIL=$(date +%s | rev | cut -c1-5)
+          SUFFIX="${TAG_SLUG}${EPOCH_TAIL}"
+
+          az containerapp update \
+            --name "${ACA_NAME}" \
+            --resource-group "${ACA_RG}" \
+            --image "${IMAGE}" \
+            --revision-suffix "${SUFFIX}"
+
+          echo "✓ Deployed ${IMAGE} → revision suffix ${SUFFIX}"
