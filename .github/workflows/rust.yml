@@ -2,7 +2,7 @@ name: rust
 
 on:
   push:
-    branches: [ main, rust-rewrite ]
+    branches: [ main-alpha, rust-rewrite ]
     paths:
       - 'crates/**'
       - 'Cargo.toml'
