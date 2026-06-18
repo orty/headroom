@@ -1,0 +1,11 @@
+## Pull
+# 🤖 a GitHub App that keeps your forks up-to-date with upstream via automated pull requests.
+# website : https://github.com/apps/pull
+# source repo: https://github.com/wei/pull
+
+version: "1"
+rules:
+  - base: main
+    upstream: chopratejas:main
+    mergeMethod: merge
+    mergeUnstable: true
