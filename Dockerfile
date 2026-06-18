@@ -103,6 +103,11 @@ ENV HEADROOM_HOST=0.0.0.0 \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
+# Declare ~/.headroom as a volume so Docker (and ACA) can attach persistent
+# storage here.  Bare `docker run` gets an anonymous volume as a fallback so
+# state is never silently written to the ephemeral container layer.
+VOLUME ["/home/nonroot/.headroom"]
+
 EXPOSE 8787
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
