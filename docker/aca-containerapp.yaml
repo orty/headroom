@@ -1,8 +1,8 @@
 # Azure Container Apps deployment for headroom-proxy
 #
 # Session history (proxy_savings.json, memory.db, session_stats.jsonl, toin.json)
-# lives in HEADROOM_WORKSPACE_DIR=/data/headroom inside the container.
-# Mounting an Azure Files share at /data makes that directory survive new
+# lives in ~/.headroom (=/home/nonroot/.headroom) inside the container.
+# Mounting an Azure Files share at /home/nonroot/.headroom makes that directory survive new
 # revisions (`:latest` re-pulls) without adding any new Azure resource:
 # every ACA Environment already has a Storage Account for its own management
 # plane — you only need to add a file share to that existing account.
@@ -84,14 +84,10 @@ properties:
         env:
           - name: HEADROOM_HOST
             value: "0.0.0.0"
-          # HEADROOM_WORKSPACE_DIR and HEADROOM_CONFIG_DIR are already baked
-          # into the image (/data/headroom and /data/headroom/config).
-          # Override here only if you need a different path.
-          #
           # - name: HEADROOM_LICENSE_KEY
           #   secretRef: license-key
         volumeMounts:
-          - mountPath: /data
+          - mountPath: /home/nonroot/.headroom
             volumeName: headroom-workspace
 
     volumes:
