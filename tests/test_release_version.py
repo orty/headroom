@@ -93,6 +93,19 @@ def test_manual_version_override_rejects_legacy_four_part_version() -> None:
         )
 
 
+def test_manual_version_override_accepts_prerelease() -> None:
+    info = compute_release_version(
+        canonical_version="0.26.0",
+        level="patch",
+        tags=["v0.26.0"],
+        manual_version="0.26.1-alpha.1",
+    )
+
+    assert info.version == "0.26.1-alpha.1"
+    assert info.npm_version == "0.26.1-alpha.1"
+    assert info.bump == "manual"
+
+
 def test_find_latest_release_tag_prefers_highest_normalized_version() -> None:
     assert find_latest_release_tag(["v0.5.25.2", "v0.5.27", "not-a-tag"]) == "v0.5.27"
 
