@@ -2,7 +2,7 @@ name: Wrap E2E
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main-alpha]
     paths:
       - 'headroom/**'
       - 'crates/**'
@@ -19,7 +19,7 @@ on:
       - 'plugins/openclaw/**'
       - '.github/workflows/wrap-e2e.yml'
   push:
-    branches: [main]
+    branches: [main-alpha]
   workflow_dispatch:
 
 concurrency:
