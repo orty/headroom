@@ -107,13 +107,12 @@ WORKDIR /home/nonroot
 ENV HEADROOM_HOST=0.0.0.0 \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    HEADROOM_VERSION=${HEADROOM_VERSION} \
-    HEADROOM_WORKSPACE_DIR=/home/nonroot/.headroom
+    HEADROOM_VERSION=${HEADROOM_VERSION}
 
 # Declare ~/.headroom as a volume so Docker (and ACA) can attach persistent
 # storage here.  Bare `docker run` gets an anonymous volume as a fallback so
 # state is never silently written to the ephemeral container layer.
-VOLUME ["/home/nonroot/.headroom"]
+VOLUME ["/root/.headroom"]
 
 EXPOSE 8787
 
@@ -140,8 +139,7 @@ ENV HEADROOM_HOST=0.0.0.0 \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=${PYTHON_SITE_PACKAGES} \
-    HEADROOM_VERSION=${HEADROOM_VERSION} \
-    HEADROOM_WORKSPACE_DIR=/home/nonroot/.headroom
+    HEADROOM_VERSION=${HEADROOM_VERSION}
 
 EXPOSE 8787
 
