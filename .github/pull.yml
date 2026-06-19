@@ -7,5 +7,5 @@ version: "1"
 rules:
   - base: main
     upstream: chopratejas:main
-    mergeMethod: merge
+    mergeMethod: hardReset
     mergeUnstable: true
