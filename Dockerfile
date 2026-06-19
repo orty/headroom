@@ -76,6 +76,11 @@ FROM python:${PYTHON_VERSION}-slim AS runtime-slim-base
 
 ARG RUNTIME_USER=nonroot
 ARG PYTHON_SITE_PACKAGES
+# Resolved release version (e.g. 0.26.1-alpha.4), stamped by docker.yml.
+# headroom._version reads it so /readyz reports the exact release tag rather
+# than the wheel metadata, which can lag a stale pyproject.toml. Empty for
+# untagged dev builds, where _version falls back to package metadata.
+ARG HEADROOM_VERSION=""
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl && \
@@ -101,7 +106,8 @@ WORKDIR /home/nonroot
 
 ENV HEADROOM_HOST=0.0.0.0 \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    HEADROOM_VERSION=${HEADROOM_VERSION}
 
 # Declare ~/.headroom as a volume so Docker (and ACA) can attach persistent
 # storage here.  Bare `docker run` gets an anonymous volume as a fallback so
@@ -120,6 +126,7 @@ FROM ${DISTROLESS_IMAGE} AS runtime-slim
 
 ARG RUNTIME_USER=nonroot
 ARG PYTHON_SITE_PACKAGES
+ARG HEADROOM_VERSION=""
 
 COPY --from=builder ${PYTHON_SITE_PACKAGES} ${PYTHON_SITE_PACKAGES}
 # Native Rust reverse proxy binary (issue #976).
@@ -131,7 +138,8 @@ WORKDIR /app
 ENV HEADROOM_HOST=0.0.0.0 \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH=${PYTHON_SITE_PACKAGES}
+    PYTHONPATH=${PYTHON_SITE_PACKAGES} \
+    HEADROOM_VERSION=${HEADROOM_VERSION}
 
 EXPOSE 8787
 

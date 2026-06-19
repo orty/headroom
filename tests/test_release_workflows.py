@@ -309,6 +309,54 @@ def test_release_yml_is_docker_only() -> None:
         )
 
 
+def test_runtime_version_prefers_stamped_env_override() -> None:
+    """headroom._version must honour the HEADROOM_VERSION env override so a
+    published image reports the exact release tag rather than the wheel
+    metadata, which can lag a stale pyproject.toml (the 0.26.1a3-vs-alpha.4 bug).
+    """
+    import importlib.util
+    import os
+
+    spec = importlib.util.spec_from_file_location(
+        "_hv_under_test", ROOT / "headroom" / "_version.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+
+    saved = os.environ.get("HEADROOM_VERSION")
+    try:
+        os.environ["HEADROOM_VERSION"] = "0.26.1-alpha.4"
+        spec.loader.exec_module(module)
+        assert module.get_version() == "0.26.1-alpha.4", (
+            "get_version() must return the exact HEADROOM_VERSION string."
+        )
+    finally:
+        if saved is None:
+            os.environ.pop("HEADROOM_VERSION", None)
+        else:
+            os.environ["HEADROOM_VERSION"] = saved
+
+
+def test_image_stamps_resolved_version_for_readyz() -> None:
+    """The resolved release version is plumbed from docker.yml into the image as
+    HEADROOM_VERSION (build arg -> ENV in both runtime stages) so /readyz reports
+    the release tag verbatim, independent of the wheel's pyproject version.
+    """
+    docker = _wf("docker.yml")
+    assert "*.args.HEADROOM_VERSION=${{ steps.version.outputs.version }}" in docker, (
+        "docker.yml must pass the resolved version into the bake build as the "
+        "HEADROOM_VERSION build arg."
+    )
+
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert dockerfile.count("ARG HEADROOM_VERSION") >= 2, (
+        "both runtime stages must declare ARG HEADROOM_VERSION."
+    )
+    assert dockerfile.count("HEADROOM_VERSION=${HEADROOM_VERSION}") >= 2, (
+        "both runtime stages must export HEADROOM_VERSION as an ENV."
+    )
+
+
 def test_no_pypi_or_npm_publish_workflows_remain() -> None:
     """The standalone PyPI fallback and release-please workflows were removed."""
     wf_dir = ROOT / ".github" / "workflows"
