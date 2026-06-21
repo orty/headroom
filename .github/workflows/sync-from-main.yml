@@ -1,19 +1,22 @@
 name: Sync main-alpha from main
 
-# Polls `main` every 30 minutes and merges any new upstream commits into
-# `main-alpha`. The push to main-alpha is authenticated with an SSH deploy key
-# (secret SYNC_DEPLOY_KEY) rather than GITHUB_TOKEN, so the resulting push
-# event DOES trigger the downstream workflows (alpha-release,
-# mirror-upstream-release, ci, docker, ...). Pushes made with the default
-# GITHUB_TOKEN are deliberately suppressed by GitHub and would not fire any of
-# them, leaving the publish cascade stalled.
+# Runs every 30 minutes. Does the full two-step upstream chain:
+#   1. Hard-reset main to chopratejas/headroom:main (replaces wei/pull automation)
+#   2. Merge main into main-alpha
+#
+# Both pushes use SYNC_DEPLOY_KEY (not GITHUB_TOKEN) so the push to main-alpha
+# fires downstream workflows (alpha-release, mirror-upstream-release, ci, ...).
+# Pushes via GITHUB_TOKEN are suppressed by GitHub and would leave the cascade
+# stalled.
 #
 # WHY SCHEDULE instead of `push: branches: [main]`:
 # GitHub reads workflow files from the branch being pushed. Since this file
 # only exists on main-alpha (not on main, which is a pure upstream mirror),
-# a push trigger on `main` would never fire — GitHub can't find the file there.
-# A schedule always runs from the default branch (main-alpha), where this file
-# lives, so it works correctly.
+# a push trigger on `main` would never fire. A schedule always runs from the
+# default branch (main-alpha), where this file lives.
+#
+# wei/pull (.github/pull.yml) is kept for manual convenience via its dashboard
+# but the automation no longer depends on it.
 #
 # Setup (one-time):
 #   1. ssh-keygen -t ed25519 -f sync_deploy_key -N "" -C "sync-main-alpha"
@@ -38,19 +41,32 @@ jobs:
         with:
           ref: main-alpha
           fetch-depth: 0
-          # Deploy key (not GITHUB_TOKEN) so the push below triggers CI/CD.
+          # Deploy key (not GITHUB_TOKEN) so pushes below trigger CI/CD.
           ssh-key: ${{ secrets.SYNC_DEPLOY_KEY }}
 
-      - name: Merge main into main-alpha
+      - name: Sync main from upstream, then merge into main-alpha
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          # Only push if main has commits not yet in main-alpha
-          if git merge-base --is-ancestor origin/main HEAD; then
+
+          git remote add upstream https://github.com/chopratejas/headroom.git
+          git fetch upstream main
+
+          # Step 1: hard-reset main to upstream if it has new commits
+          upstream_sha="$(git rev-parse upstream/main)"
+          origin_main_sha="$(git rev-parse origin/main)"
+          if [ "$upstream_sha" = "$origin_main_sha" ]; then
+            echo "main already up to date with upstream"
+          else
+            git push origin "upstream/main:refs/heads/main" --force
+            echo "Synced main: ${origin_main_sha:0:7} -> ${upstream_sha:0:7}"
+          fi
+
+          # Step 2: merge main into main-alpha if it has new commits
+          if git merge-base --is-ancestor upstream/main HEAD; then
             echo "main-alpha already up to date with main, nothing to do"
             exit 0
           fi
-          git merge origin/main --no-edit --no-ff \
+          git merge upstream/main --no-edit --no-ff \
             -m "chore(sync): merge main into main-alpha"
           git push origin main-alpha
