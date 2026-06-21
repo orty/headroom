@@ -1,12 +1,19 @@
 name: Sync main-alpha from main
 
-# Fires as soon as Pull updates `main` from upstream (chopratejas:main), then
-# merges `main` into `main-alpha`. The push to main-alpha is authenticated with
-# an SSH deploy key (secret SYNC_DEPLOY_KEY) rather than GITHUB_TOKEN, so the
-# resulting push event DOES trigger the downstream workflows (alpha-release,
+# Polls `main` every 30 minutes and merges any new upstream commits into
+# `main-alpha`. The push to main-alpha is authenticated with an SSH deploy key
+# (secret SYNC_DEPLOY_KEY) rather than GITHUB_TOKEN, so the resulting push
+# event DOES trigger the downstream workflows (alpha-release,
 # mirror-upstream-release, ci, docker, ...). Pushes made with the default
 # GITHUB_TOKEN are deliberately suppressed by GitHub and would not fire any of
 # them, leaving the publish cascade stalled.
+#
+# WHY SCHEDULE instead of `push: branches: [main]`:
+# GitHub reads workflow files from the branch being pushed. Since this file
+# only exists on main-alpha (not on main, which is a pure upstream mirror),
+# a push trigger on `main` would never fire — GitHub can't find the file there.
+# A schedule always runs from the default branch (main-alpha), where this file
+# lives, so it works correctly.
 #
 # Setup (one-time):
 #   1. ssh-keygen -t ed25519 -f sync_deploy_key -N "" -C "sync-main-alpha"
@@ -16,8 +23,8 @@ name: Sync main-alpha from main
 #        - name: SYNC_DEPLOY_KEY, value: contents of the private sync_deploy_key
 
 on:
-  push:
-    branches: [main]
+  schedule:
+    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 permissions:
