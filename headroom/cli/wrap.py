@@ -50,7 +50,13 @@ from headroom.copilot_auth import (
     resolve_subscription_bearer_token_details,
 )
 from headroom.providers.aider import build_launch_env as _build_aider_launch_env
-from headroom.providers.claude import proxy_base_url as _claude_proxy_base_url
+from headroom.providers.claude import (
+    TOOL_SEARCH_DEFAULT,
+    TOOL_SEARCH_ENV,
+)
+from headroom.providers.claude import (
+    proxy_base_url as _claude_proxy_base_url,
+)
 from headroom.providers.codex import build_launch_env as _build_codex_launch_env
 from headroom.providers.codex.install import codex_uses_chatgpt_auth
 from headroom.providers.codex.threads import retag_to_headroom, retag_to_native
@@ -121,9 +127,10 @@ _WRAP_PROXY_TIMEOUT_ML_MODULES = ("torch", "sentence_transformers", "spacy")
 # when we launch Claude Code keeps deferral on. Default to "true" — defer the
 # MCP/system tools for maximum context savings, matching native first-party
 # behaviour (core built-ins like Read/Edit/Bash are never deferred by Claude
-# Code, so the agent loop is unaffected).
-_TOOL_SEARCH_ENV = "ENABLE_TOOL_SEARCH"
-_TOOL_SEARCH_DEFAULT = "true"
+# Code, so the agent loop is unaffected). The key/default are shared with
+# `init` and `install` via the Claude provider package to prevent drift.
+_TOOL_SEARCH_ENV = TOOL_SEARCH_ENV
+_TOOL_SEARCH_DEFAULT = TOOL_SEARCH_DEFAULT
 _AGENT_SAVINGS_WRAP_AGENTS = {"claude", "codex", "cursor"}
 _DEFAULT_AGENT_SAVINGS_PROFILE = "agent-90"
 
@@ -508,12 +515,26 @@ def _setup_lean_ctx_agent(agent: str, verbose: bool = False) -> Path | None:
     return lean_ctx
 
 
-def _remove_claude_rtk_hooks(settings_path: Path | None = None) -> bool:
-    """Remove Headroom/rtk-managed Claude hook entries from settings.json.
+# Hook-command markers Headroom manages in Claude settings.json. unwrap drops
+# any hook entry whose command contains one of these.
+_HEADROOM_HOOK_MARKERS = ("rtk-rewrite", "headroom-init-claude")
 
-    `rtk init --global --auto-patch` installs a Claude PreToolUse hook that
-    points at an ``rtk-rewrite`` script. Unwrap should remove that hook without
-    touching unrelated Claude settings or user-authored hooks.
+# Env vars Headroom's init/wrap inject into Claude settings.json; unwrap removes
+# them. ENABLE_TOOL_SEARCH keeps Claude Code's tool deferral on behind the proxy
+# (GH #746), paired with init/wrap setting it.
+_HEADROOM_ENV_KEYS = ("ANTHROPIC_BASE_URL", "ENABLE_TOOL_SEARCH")
+
+
+def _remove_claude_rtk_hooks(settings_path: Path | None = None) -> bool:
+    """Remove Headroom-managed entries from Claude settings.json.
+
+    Reverses what ``headroom init claude`` and ``rtk init --auto-patch`` add:
+      * PreToolUse / SessionStart hooks whose command contains a Headroom marker
+        (``rtk-rewrite`` or ``headroom-init-claude``), and
+      * the ``ANTHROPIC_BASE_URL`` proxy-routing env var.
+    Unrelated settings and user-authored hooks are left untouched. (Previously
+    this only matched ``rtk-rewrite`` and returned early when no hooks existed,
+    so init's env + hooks survived unwrap.)
     """
 
     path = settings_path or (Path.home() / ".claude" / "settings.json")
@@ -527,51 +548,68 @@ def _remove_claude_rtk_hooks(settings_path: Path | None = None) -> bool:
     if not isinstance(payload, dict):
         return False
 
-    hooks = payload.get("hooks")
-    if not isinstance(hooks, dict):
-        return False
-
     changed = False
-    for event, entries in list(hooks.items()):
-        if not isinstance(entries, list):
-            continue
-        retained_entries: list[Any] = []
-        for entry in entries:
-            if not isinstance(entry, dict):
-                retained_entries.append(entry)
+
+    hooks = payload.get("hooks")
+    if isinstance(hooks, dict):
+        for event, entries in list(hooks.items()):
+            if not isinstance(entries, list):
                 continue
-            hook_items = entry.get("hooks")
-            if not isinstance(hook_items, list):
-                retained_entries.append(entry)
-                continue
-            retained_hooks = [
-                item
-                for item in hook_items
-                if not (
-                    isinstance(item, dict) and "rtk-rewrite" in str(item.get("command", "")).lower()
-                )
-            ]
-            if len(retained_hooks) != len(hook_items):
-                changed = True
-            if retained_hooks:
-                retained_entries.append({**entry, "hooks": retained_hooks})
-            elif len(retained_hooks) == len(hook_items):
-                retained_entries.append(entry)
+            retained_entries: list[Any] = []
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    retained_entries.append(entry)
+                    continue
+                hook_items = entry.get("hooks")
+                if not isinstance(hook_items, list):
+                    retained_entries.append(entry)
+                    continue
+                retained_hooks = [
+                    item
+                    for item in hook_items
+                    if not (
+                        isinstance(item, dict)
+                        and any(
+                            marker in str(item.get("command", "")).lower()
+                            for marker in _HEADROOM_HOOK_MARKERS
+                        )
+                    )
+                ]
+                if len(retained_hooks) != len(hook_items):
+                    changed = True
+                if retained_hooks:
+                    retained_entries.append({**entry, "hooks": retained_hooks})
+                elif len(retained_hooks) == len(hook_items):
+                    retained_entries.append(entry)
+                else:
+                    changed = True
+            if retained_entries:
+                hooks[event] = retained_entries
             else:
+                del hooks[event]
                 changed = True
-        if retained_entries:
-            hooks[event] = retained_entries
+
+        if hooks:
+            payload["hooks"] = hooks
         else:
-            del hooks[event]
+            payload.pop("hooks", None)
+
+    # Remove the proxy-routing env that init/wrap injected (ANTHROPIC_BASE_URL and
+    # ENABLE_TOOL_SEARCH), even when no hooks remain (the early-return bug skipped
+    # this). List-comp, not any(), so every key is popped (no short-circuit).
+    env = payload.get("env")
+    if isinstance(env, dict):
+        removed_keys = [k for k in _HEADROOM_ENV_KEYS if env.pop(k, None) is not None]
+        if removed_keys:
             changed = True
+            if env:
+                payload["env"] = env
+            else:
+                payload.pop("env", None)
 
     if not changed:
         return False
 
-    if hooks:
-        payload["hooks"] = hooks
-    else:
-        payload.pop("hooks", None)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return True
 
@@ -2519,7 +2557,7 @@ def _marker_pid_reused(marker: Path, pid: int) -> bool:
         return False
     src = rec.get("start_src")
     recorded = rec.get("start_time")
-    if not isinstance(src, str) or not isinstance(recorded, (int, float)):
+    if not isinstance(src, str) or not isinstance(recorded, int | float):
         return False  # legacy / identity-less marker — can't tell
     ident = _proc_identity(pid)
     if ident is None or ident[0] != src:
