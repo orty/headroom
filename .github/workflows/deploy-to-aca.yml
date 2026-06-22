@@ -1,0 +1,110 @@
+name: Deploy to Azure Container Apps
+
+# Triggers AFTER the Release workflow completes successfully (not on release
+# published directly) so the Docker image is guaranteed to exist.
+#
+# Image routing:
+# - Fork pre-release tag (contains -alpha/-beta/-rc): ghcr.io/orty/headroom:<tag>
+# - Stable mirrored tag (e.g. v0.26.0): ghcr.io/headroomlabs-ai/headroom:<tag>
+#
+# REQUIRED SECRETS:
+#   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag to deploy (empty = latest fork image)'
+        required: false
+        default: ''
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ACA_NAME: headroom
+  ACA_RG: RG-SAR
+  FORK_IMAGE: ghcr.io/orty/headroom
+  UPSTREAM_IMAGE: ghcr.io/headroomlabs-ai/headroom
+
+jobs:
+  deploy:
+    # Only deploy when Release workflow succeeded (or manual dispatch)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Resolve image
+        id: image
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # An explicit tag from a manual dispatch wins.
+          TAG=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          fi
+
+          # Otherwise resolve from the releases list. The triggering tag is NOT
+          # in the workflow_run payload, and the run's head-branch field is the
+          # *branch* (main-alpha) — which contains "-alpha" and mis-routes to the
+          # dev image (the bug that made /readyz report 0.26.0). `gh release view`
+          # ignores pre-releases (fork builds are -alpha), so that won't help.
+          #
+          # Pick the HIGHEST-SEMVER non-draft release, NOT the most recent by
+          # time: an upstream bump cuts both a stable mirror (vX.Y.Z) and a fork
+          # alpha (vX.Y.(Z+1)-alpha.N) on the same push, and they publish in a
+          # non-deterministic order. The alpha is always the higher version, so
+          # selecting by version guarantees ACA converges on the customized alpha
+          # image rather than the bare upstream stable.
+          if [ -z "$TAG" ]; then
+            TAG="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 50 \
+              --json tagName,isDraft \
+              -q '.[] | select(.isDraft == false) | .tagName' | sort -V | tail -1)"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::could not resolve a release tag to deploy"
+            exit 1
+          fi
+
+          # Published image tags drop the leading "v" (docker.yml strips it),
+          # so normalize before building the pull reference.
+          TAG="${TAG#v}"
+
+          if echo "$TAG" | grep -qE -- '-alpha|-beta|-rc'; then
+            echo "image=${FORK_IMAGE}:${TAG}" >> "$GITHUB_OUTPUT"
+          else
+            echo "image=${UPSTREAM_IMAGE}:${TAG}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Update Container App
+        run: |
+          IMAGE="${{ steps.image.outputs.image }}"
+          TAG="${{ steps.image.outputs.tag }}"
+          TAG_SLUG=$(echo "${TAG}" | tr -cd 'a-z0-9' | cut -c1-5)
+          EPOCH_TAIL=$(date +%s | tail -c 6)
+          SUFFIX="${TAG_SLUG}${EPOCH_TAIL}"
+
+          az containerapp update \
+            --name "${ACA_NAME}" \
+            --resource-group "${ACA_RG}" \
+            --image "${IMAGE}" \
+            --revision-suffix "${SUFFIX}"
+
+          echo "✓ Deployed ${IMAGE} → revision suffix ${SUFFIX}"
