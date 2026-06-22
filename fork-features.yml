@@ -1,0 +1,8 @@
+# Fork feature registry. The rebuild (scripts/fork-rebuild.sh) replays each
+# feature whose upstream PR is still OPEN (or upstream_pr is null) AND
+# active != false. When the PR merges upstream, the feature stops replaying and
+# the fork delta shrinks. Feature branches MUST be linear (no merge commits).
+features:
+  - branch: feat/docker-session-history-persist
+    upstream_pr: headroomlabs-ai/headroom#1118
+    active: true
