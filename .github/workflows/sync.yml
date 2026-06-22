@@ -1,0 +1,72 @@
+name: Sync (rebuild main-alpha)
+
+# Every 30 min: rebuild main-alpha = upstream/main + replayed active features
+# (fork-features.yml) + the fork overlay, and mirror fork `main` to upstream.
+#
+# Runs from the default branch (main-alpha), where this file lives, so the
+# schedule fires. Uses SYNC_DEPLOY_KEY (NOT GITHUB_TOKEN) so the force-push to
+# main-alpha triggers alpha-release.yml / mirror-upstream-release.yml. The
+# rebuild engine (scripts/fork-rebuild.sh) reads fork-owned files from the
+# stable `fork-overlay` branch and copies them whole — never a merge — so it
+# cannot conflict.
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main-alpha
+          fetch-depth: 0
+          ssh-key: ${{ secrets.SYNC_DEPLOY_KEY }}
+
+      - name: Configure git + fetch refs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/headroomlabs-ai/headroom.git
+          git fetch upstream main
+          # fork-overlay (overlay source of truth) and all feature branches.
+          git fetch origin fork-overlay 'refs/heads/feat/*:refs/remotes/origin/feat/*' || true
+          git fetch origin '+refs/heads/feat/*:refs/heads/feat/*' || true
+
+      - name: Mirror origin/main := upstream/main
+        run: |
+          if [ "$(git rev-parse upstream/main)" != "$(git rev-parse origin/main)" ]; then
+            git push origin upstream/main:refs/heads/main --force
+            echo "mirrored main -> $(git rev-parse --short upstream/main)"
+          else
+            echo "main already current"
+          fi
+
+      - name: Rebuild main-alpha
+        env:
+          GH_TOKEN: ${{ secrets.FORK_RELEASE_PAT }}
+        run: |
+          git update-ref -d refs/heads/main-alpha-next 2>/dev/null || true
+          # COMPARE_REF = the live branch, so an unchanged rebuild is reported as
+          # NO_CHANGE and the temp ref is never created (no spurious alpha).
+          UPSTREAM_REF=upstream/main OVERLAY_REF=origin/fork-overlay \
+            COMPARE_REF=origin/main-alpha OUT_REF=refs/heads/main-alpha-next \
+            bash scripts/fork-rebuild.sh
+
+      - name: Force-push main-alpha if changed
+        run: |
+          if git rev-parse -q --verify refs/heads/main-alpha-next >/dev/null 2>&1; then
+            git push origin refs/heads/main-alpha-next:refs/heads/main-alpha --force
+            echo "pushed rebuilt main-alpha"
+          else
+            echo "rebuild reported NO_CHANGE; nothing to push"
+          fi

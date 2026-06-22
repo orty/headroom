@@ -6,11 +6,11 @@ import os
 import re
 import subprocess
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
-RELEASE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?$")
+SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z][0-9A-Za-z.-]*)?$")
+RELEASE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$")
 CONVENTIONAL_COMMIT_RE = re.compile(
     r"^(feat|fix|ci|chore|perf|refactor|docs|style|test)(\(.+\))?(!)?:\s*(.+)$"
 )
@@ -28,13 +28,15 @@ class SemVer:
     major: int
     minor: int
     patch: int
+    pre_release: str = field(default="", compare=False)
 
     @classmethod
     def parse(cls, value: str) -> SemVer:
         match = SEMVER_RE.match(value)
         if not match:
             raise ValueError(f"Invalid semantic version: {value}")
-        return cls(*(int(part) for part in match.groups()))
+        major, minor, patch, pre = match.groups()
+        return cls(int(major), int(minor), int(patch), pre_release=pre or "")
 
     def bump(self, level: str) -> SemVer:
         if level == "major":
@@ -46,7 +48,7 @@ class SemVer:
         raise ValueError(f"Unsupported bump level: {level}")
 
     def __str__(self) -> str:
-        return f"{self.major}.{self.minor}.{self.patch}"
+        return f"{self.major}.{self.minor}.{self.patch}{self.pre_release}"
 
 
 @dataclass(frozen=True)
