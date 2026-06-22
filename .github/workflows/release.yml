@@ -1,0 +1,82 @@
+name: Release
+
+# Fork is Docker-only. This workflow reacts to a *published release* and builds
+# + publishes the Docker images for that exact version. Releases are created by:
+#   - mirror-upstream-release.yml  -> exact upstream tag (vX.Y.Z, stable)
+#   - alpha-release.yml            -> fork pre-release (vX.Y.(Z+1)-alpha.N)
+# It is also the "Release" workflow that deploy-to-aca.yml chains off via
+# workflow_run, so both stable and alpha releases flow through here to Docker
+# and then to the ACA deploy.
+#
+# The PyPI/npm publish jobs and the wheel/sdist/SBOM build matrix were removed:
+# the fork only ships Docker images, and docker.yml builds those from source
+# (it does not consume any wheel/dist artifact from this workflow).
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Manual version override"
+        required: false
+      dry_run:
+        description: "Skip publish"
+        type: boolean
+        default: false
+
+concurrency:
+  # Namespaced by ref; never cancel — losing a release build mid-flight would
+  # leave Docker/ACA in partial state.
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  detect-version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # On a release event the published tag IS the canonical version for this
+      # run (release_version.py's git-log derivation would otherwise re-bump
+      # it). workflow_dispatch honors `inputs.version`.
+      - name: Resolve MANUAL_VER from trigger
+        id: manualver
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          MANUAL_INPUT: ${{ github.event.inputs.version }}
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            # tag is "vX.Y.Z" (or "vX.Y.Z-alpha.N") — strip the leading "v"
+            echo "value=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+          elif [ -n "$MANUAL_INPUT" ]; then
+            echo "value=$MANUAL_INPUT" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compute version
+        id: ver
+        run: |
+          python headroom/release_version.py
+        env:
+          MANUAL_VER: ${{ steps.manualver.outputs.value }}
+
+  publish-docker:
+    needs: [detect-version]
+    if: github.event.inputs.dry_run != 'true'
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/docker.yml
+    with:
+      version: ${{ needs.detect-version.outputs.version }}
+      enable_ref_tags: false
