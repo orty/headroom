@@ -6,11 +6,11 @@ import os
 import re
 import subprocess
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
-RELEASE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?$")
+SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z][0-9A-Za-z.-]*)?$")
+RELEASE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$")
 CONVENTIONAL_COMMIT_RE = re.compile(
     r"^(feat|fix|ci|chore|perf|refactor|docs|style|test)(\(.+\))?(!)?:\s*(.+)$"
 )
@@ -28,13 +28,15 @@ class SemVer:
     major: int
     minor: int
     patch: int
+    pre_release: str = field(default="", compare=False)
 
     @classmethod
     def parse(cls, value: str) -> SemVer:
         match = SEMVER_RE.match(value)
         if not match:
             raise ValueError(f"Invalid semantic version: {value}")
-        return cls(*(int(part) for part in match.groups()))
+        major, minor, patch, pre = match.groups()
+        return cls(int(major), int(minor), int(patch), pre_release=pre or "")
 
     def bump(self, level: str) -> SemVer:
         if level == "major":
@@ -46,7 +48,7 @@ class SemVer:
         raise ValueError(f"Unsupported bump level: {level}")
 
     def __str__(self) -> str:
-        return f"{self.major}.{self.minor}.{self.patch}"
+        return f"{self.major}.{self.minor}.{self.patch}{self.pre_release}"
 
 
 @dataclass(frozen=True)
@@ -283,45 +285,9 @@ def write_github_outputs(info: ReleaseVersionInfo, output_path: str) -> None:
 def main() -> None:
     root = Path.cwd()
     manual_version = os.environ.get("MANUAL_VER", "").strip()
-    manual_match = re.fullmatch(r"v?(\d+\.\d+\.\d+(?:[abrc]\d+)?)", (os.environ.get("MANUAL_VER") or os.environ.get("LEVEL", "patch")).strip())
-    if manual_match:
-        version = manual_match.group(1)
-        info = ReleaseVersionInfo(
-            version=version,
-            npm_version=version,
-            canonical=get_canonical_version(root),
-            bump="manual",
-            height="0",
-            previous_tag="",
-        )
-        output_path = os.environ.get("GITHUB_OUTPUT")
-        if output_path:
-            write_github_outputs(info, output_path)
-        print(f"version={info.version}")
-        print(f"npm_version={info.npm_version}")
-        print(f"height={info.height}")
-        return
     tags = list_release_tags(root)
     previous_tag = find_latest_release_tag(tags) or ""
     level = os.environ.get("LEVEL", "").strip()
-    manual_match = re.fullmatch(r"v?(\d+\.\d+\.\d+(?:[abrc]\d+)?)", level.strip())
-    if manual_match:
-        version = manual_match.group(1)
-        info = ReleaseVersionInfo(
-            version=version,
-            npm_version=version,
-            canonical=get_canonical_version(root),
-            bump="manual",
-            height="0",
-            previous_tag="",
-        )
-        output_path = os.environ.get("GITHUB_OUTPUT")
-        if output_path:
-            write_github_outputs(info, output_path)
-        print(f"version={info.version}")
-        print(f"npm_version={info.npm_version}")
-        print(f"height={info.height}")
-        return
     if not level:
         level = determine_bump_level(list_release_commits(root, previous_tag))
 
