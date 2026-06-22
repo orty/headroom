@@ -11,7 +11,7 @@
 <p align="center"><strong>60–95% fewer tokens · library · proxy · MCP · 6 algorithms · local-first · reversible</strong></p>
 
 <p align="center">
-  <a href="https://github.com/chopratejas/headroom/actions/workflows/ci.yml"><img src="https://github.com/chopratejas/headroom/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/headroomlabs-ai/headroom/actions/workflows/ci.yml"><img src="https://github.com/headroomlabs-ai/headroom/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://app.codecov.io/gh/chopratejas/headroom"><img src="https://codecov.io/gh/chopratejas/headroom/graph/badge.svg" alt="codecov"></a>
   <a href="https://pypi.org/project/headroom-ai/"><img src="https://img.shields.io/pypi/v/headroom-ai.svg" alt="PyPI"></a>
   <a href="https://www.npmjs.com/package/headroom-ai"><img src="https://img.shields.io/npm/v/headroom-ai.svg" alt="npm"></a>
@@ -395,7 +395,7 @@ Headroom runs **locally**, covers **every** content type, works with every major
 ## Contributing
 
 ```bash
-git clone https://github.com/chopratejas/headroom.git && cd headroom
+git clone https://github.com/headroomlabs-ai/headroom.git && cd headroom
 uv sync --extra dev && uv run pytest
 ```
 

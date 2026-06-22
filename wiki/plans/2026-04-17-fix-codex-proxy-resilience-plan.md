@@ -483,6 +483,6 @@ Decision matrix for "where does this request wait?":
   - `headroom/transforms/content_router.py` — `eager_load_compressors`
   - `headroom/transforms/kompress_compressor.py` — `_load_kompress_onnx`, `_kompress_cache`
 - Related PRs/issues:
-  - Upstream: `https://github.com/chopratejas/headroom/issues/172`
+  - Upstream: `https://github.com/headroomlabs-ai/headroom/issues/172`
   - Fork branch: `fix/responses-retries-keep-compression` (commit `0b11637`)
 - External docs: none used for this plan.

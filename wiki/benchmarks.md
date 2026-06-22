@@ -192,7 +192,7 @@ A 94.9% compression means the output is 5.1% of the original size.
 
 ```bash
 # Clone the repo
-git clone https://github.com/chopratejas/headroom.git
+git clone https://github.com/headroomlabs-ai/headroom.git
 cd headroom
 
 # Install with eval dependencies

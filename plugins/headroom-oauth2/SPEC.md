@@ -1,6 +1,6 @@
 # Spec — `headroom-oauth2` (generic OAuth2 client-credentials upstream auth)
 
-Feature request: [chopratejas/headroom#778](https://github.com/chopratejas/headroom/issues/778).
+Feature request: [chopratejas/headroom#778](https://github.com/headroomlabs-ai/headroom/issues/778).
 Status: implementation ready; awaiting maintainer 👍 before merge.
 
 ## Summary

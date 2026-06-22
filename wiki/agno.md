@@ -360,7 +360,7 @@ We're tracking these potential enhancements:
 - **Tool schema deduplication** — Cache and reference repeated tool definitions
 - **Team-level optimization** — Shared context compression across agent teams
 
-Contributions welcome! See [CONTRIBUTING.md](https://github.com/chopratejas/headroom/blob/main/CONTRIBUTING.md).
+Contributions welcome! See [CONTRIBUTING.md](https://github.com/headroomlabs-ai/headroom/blob/main/CONTRIBUTING.md).
 
 ---
 

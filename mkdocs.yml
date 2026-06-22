@@ -2,7 +2,7 @@ site_name: Headroom
 docs_dir: wiki
 site_description: "The Context Optimization Layer for LLM Applications — compress everything your AI agent reads."
 site_url: https://chopratejas.github.io/headroom
-repo_url: https://github.com/chopratejas/headroom
+repo_url: https://github.com/headroomlabs-ai/headroom
 repo_name: chopratejas/headroom
 edit_uri: edit/main/docs/
 
@@ -128,7 +128,7 @@ nav:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/chopratejas/headroom
+      link: https://github.com/headroomlabs-ai/headroom
     - icon: fontawesome/brands/python
       link: https://pypi.org/project/headroom-ai/
     - icon: fontawesome/brands/discord
