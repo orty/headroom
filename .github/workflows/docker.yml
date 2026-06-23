@@ -51,19 +51,16 @@ jobs:
     timeout-minutes: 75
     strategy:
       fail-fast: false
+      # ponytail: fork only consumes the root runtime image on linux/amd64 (ACA).
+      # Upstream's 8 variants × 2 arches (16 builds, ~the whole CI wall-clock) are
+      # dead weight here. Trimmed to the single variant ACA pulls. To restore a
+      # variant/arch (e.g. arm64, or a `code`/`slim` flavor for other consumers),
+      # re-add its line to BOTH this matrix and the docker-manifest matrix below.
       matrix:
         variant:
           - { name: "", bake_target: runtime }
-          - { name: nonroot, bake_target: runtime-nonroot }
-          - { name: code, bake_target: runtime-code }
-          - { name: code-nonroot, bake_target: runtime-code-nonroot }
-          - { name: slim, bake_target: runtime-slim }
-          - { name: slim-nonroot, bake_target: runtime-slim-nonroot }
-          - { name: code-slim, bake_target: runtime-code-slim }
-          - { name: code-slim-nonroot, bake_target: runtime-code-slim-nonroot }
         arch:
           - { name: amd64, runs_on: ubuntu-24.04, platform: linux/amd64 }
-          - { name: arm64, runs_on: ubuntu-24.04-arm, platform: linux/arm64 }
 
     steps:
       - uses: actions/checkout@v6
@@ -219,16 +216,10 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
+      # ponytail: matches the trimmed docker-build matrix (root variant only).
       matrix:
         variant:
           - { name: "", bake_target: runtime }
-          - { name: nonroot, bake_target: runtime-nonroot }
-          - { name: code, bake_target: runtime-code }
-          - { name: code-nonroot, bake_target: runtime-code-nonroot }
-          - { name: slim, bake_target: runtime-slim }
-          - { name: slim-nonroot, bake_target: runtime-slim-nonroot }
-          - { name: code-slim, bake_target: runtime-code-slim }
-          - { name: code-slim-nonroot, bake_target: runtime-code-slim-nonroot }
 
     steps:
       # No `actions/checkout` here: the manifest job only calls
