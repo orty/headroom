@@ -224,6 +224,22 @@ basename is not in the keep-set; also delete `.github/pull.yml` (wei/pull replac
 `network-diff-capture.yml`, `pr-health.yml`, `stale.yml`, and the e2e/init/wrap/install
 set — but the rule, not this list, is authoritative.
 
+### Mirror-branch containment (stable-release leak)
+
+The keep-list only trims **`main-alpha`**. Fork **`main`** is a byte-for-byte mirror of
+upstream and therefore carries *every* upstream workflow, including **Release Please**.
+On each sync force-push to `main`, Release Please reads `feat:` commits since the last tag,
+computes the next minor (e.g. `0.28.0`), and opens a "chore: release" PR — a stable bump
+the fork must never make (fork stable tags come **only** from `mirror-upstream-release.yml`).
+
+A tree-level fix is impossible (the mirror must stay pure), so it is contained at the
+**repo/Actions level**: `Release Please` is **disabled** (`gh workflow disable "Release Please"`).
+The disable persists across pushes; it does not divert `main` from upstream and adds no floor
+commit. If upstream renames its release-please workflow file, the new id re-enables by default
+— re-disable it. Do **not** disable `Release`/`Docker` (shared file paths with the fork's own
+pipeline — disabling kills the alpha pipeline globally). Remaining upstream CI on `main` (ci,
+e2e, docs, rust…) only burns runner minutes and is optional to disable.
+
 ## ACA artifacts
 
 - `deploy-to-aca.yml` is **fork-only** → lives in the floor overlay (additive copy).
