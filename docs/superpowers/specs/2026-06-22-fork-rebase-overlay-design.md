@@ -238,7 +238,11 @@ The disable persists across pushes; it does not divert `main` from upstream and 
 commit. If upstream renames its release-please workflow file, the new id re-enables by default
 — re-disable it. Do **not** disable `Release`/`Docker` (shared file paths with the fork's own
 pipeline — disabling kills the alpha pipeline globally). Remaining upstream CI on `main` (ci,
-e2e, docs, rust…) only burns runner minutes and is optional to disable.
+e2e, docs, rust…) only burns runner minutes; these are **also disabled** (`gh workflow disable`).
+Net active workflows on the fork: `Docker`, `Release`, `Mirror Upstream Releases`,
+`Deploy to Azure Container Apps`, `Alpha Release`, `Sync` (+ GitHub's `Copilot` / `Dependency
+Graph`). Everything else is `disabled_manually`. Re-disable any upstream workflow that reappears
+under a new file id after an upstream rename.
 
 ## ACA artifacts
 
