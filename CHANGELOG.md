@@ -45,6 +45,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [0.28.0](https://github.com/orty/headroom/compare/v0.27.0...v0.28.0) (2026-06-23)
+
+
+### Features
+
+* add HEADROOM_KEEPALIVE_EXPIRY to keep upstream connections warm ([#1124](https://github.com/orty/headroom/issues/1124)) ([85786b3](https://github.com/orty/headroom/commit/85786b33a3a88b8c905739aa34ccfafa01a89e5d))
+* **azure-foundry:** derive upstream URL from ANTHROPIC_FOUNDRY_RESOURCE ([#1138](https://github.com/orty/headroom/issues/1138)) ([e5031b0](https://github.com/orty/headroom/commit/e5031b01219278620431b5560b247e65f1b08a13))
+* **code:** add Perl support to code-aware compressor ([#1125](https://github.com/orty/headroom/issues/1125)) ([f39858c](https://github.com/orty/headroom/commit/f39858c23325f9f27b47a738731e7260f7b59d9e))
+* headroom wrap opencode / unwrap opencode CLI ([#1105](https://github.com/orty/headroom/issues/1105)) ([b4571cc](https://github.com/orty/headroom/commit/b4571cc346f6bba29e600fa82bbf5cf302e8ea27))
+* **learn:** weight loops in Headroom Learn + RTK-loop eval ([#1160](https://github.com/orty/headroom/issues/1160)) ([14e8dc4](https://github.com/orty/headroom/commit/14e8dc4c8408b8014433ba7589bbb1dff7805134))
+* **learn:** write per-project learnings to CLAUDE.local.md by default ([#1115](https://github.com/orty/headroom/issues/1115)) ([ced75e4](https://github.com/orty/headroom/commit/ced75e4718b5fd84d07cbd68273dcf9b9ef878a3))
+* **proxy:** add request timeout config ([#738](https://github.com/orty/headroom/issues/738)) ([c0745d4](https://github.com/orty/headroom/commit/c0745d4161d19e21ca36506f7733f0776e19e1a8))
+* **proxy:** support glob patterns in exclude_tools ([#870](https://github.com/orty/headroom/issues/870)) ([#1259](https://github.com/orty/headroom/issues/1259)) ([a2159c0](https://github.com/orty/headroom/commit/a2159c0b66a7aa1b7f64057a1c8e3e50f0a43e37))
+* **savings:** durable savings ledger + headroom savings command ([#1127](https://github.com/orty/headroom/issues/1127)) ([978ffa0](https://github.com/orty/headroom/commit/978ffa0a6ab9da1a75239270e17961530c213b9d))
+
+
+### Bug Fixes
+
+* **agent-evals:** Phase 0 — coding-agent accuracy A/B framework ([#1037](https://github.com/orty/headroom/issues/1037)) ([84f9871](https://github.com/orty/headroom/commit/84f9871e303d587f5b406036b97b9f5a689c1b05))
+* **ci:** normalize Windows CRLF line endings in PR governance script ([#1012](https://github.com/orty/headroom/issues/1012)) ([5194388](https://github.com/orty/headroom/commit/5194388b6652d823ad6ab1d8c17d5572b7f0ec23))
+* **docker:** persist session history across container revisions ([#1118](https://github.com/orty/headroom/issues/1118)) ([5912d65](https://github.com/orty/headroom/commit/5912d65674c708b00cff9a8cbc3b529fd2ab69fa))
+* **langchain:** disable streaming on wrapped model during ainvoke() ([#1287](https://github.com/orty/headroom/issues/1287)) ([3590046](https://github.com/orty/headroom/commit/359004646bb2cda2b99cf3ef154539b7fa81aa72))
+* **mcp:** report correct savings_percent in headroom_compress ([#1106](https://github.com/orty/headroom/issues/1106)) ([f216e43](https://github.com/orty/headroom/commit/f216e430559759f51b53eb44e76e030e6a83c80a))
+* **proxy:** build SSL contexts for custom CA bundles ([#1134](https://github.com/orty/headroom/issues/1134)) ([561ba17](https://github.com/orty/headroom/commit/561ba17ec2e05b463682fd3ecfe7ca43b558684f))
+* **proxy:** honor force_kompress routing profile ([#996](https://github.com/orty/headroom/issues/996)) ([b4682d6](https://github.com/orty/headroom/commit/b4682d6f91c782286553875b7fd8cee6101f1b0f))
+* **router:** degrade to pure-Python detection on native panic ([#1123](https://github.com/orty/headroom/issues/1123)) ([#1260](https://github.com/orty/headroom/issues/1260)) ([a00fb67](https://github.com/orty/headroom/commit/a00fb6761eddf59ede6767211da06f8840552f14))
+* **smart-crusher:** honor enable_ccr_marker on the opaque-blob path ([#1130](https://github.com/orty/headroom/issues/1130)) ([27d6f8e](https://github.com/orty/headroom/commit/27d6f8e2a767b58eb7d2f47599f68e8bdc49fb7f))
+* **tokenizers:** price CJK/Kana/Hangul at ~1 token per char in EstimatingTokenCounter ([#1093](https://github.com/orty/headroom/issues/1093)) ([a35fe86](https://github.com/orty/headroom/commit/a35fe86e87725e660779f9cbbb0825f87f59d532))
+* **wrap:** isolate proxy stdio from proxy.log on Windows ([#1191](https://github.com/orty/headroom/issues/1191)) ([959ab0d](https://github.com/orty/headroom/commit/959ab0de471293e76df1f124ed0090c62e62c308))
+* **wrap:** keep agent savings opt-in ([#1294](https://github.com/orty/headroom/issues/1294)) ([b829ceb](https://github.com/orty/headroom/commit/b829ceba84ce058dadb4e70f6766af13806a4385))
+
 ## [0.27.0](https://github.com/chopratejas/headroom/compare/v0.26.0...v0.27.0) (2026-06-22)
 
 
