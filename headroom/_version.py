@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -46,6 +47,17 @@ def _source_tree_version(root: Path) -> str | None:
 
 def get_version() -> str:
     """Return Headroom's runtime version."""
+    # Explicit override stamped into the container image at build time
+    # (docker.yml passes the resolved release version as HEADROOM_VERSION).
+    # This is authoritative in published images and is immune to stale
+    # pyproject.toml / build-cache: importlib.metadata reflects the *wheel*
+    # version, which on a fork build can lag the release tag (e.g. /readyz
+    # showed 0.26.1a3 for the 0.26.1-alpha.4 image because pyproject was not
+    # bumped). The stamp also avoids needing a .git checkout at runtime.
+    env_version = os.environ.get("HEADROOM_VERSION", "").strip()
+    if env_version:
+        return env_version
+
     root = _source_root()
     if root is not None:
         source_version = _source_tree_version(root)
