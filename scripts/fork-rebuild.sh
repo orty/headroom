@@ -2,10 +2,19 @@
 # Regenerate a fork alpha branch = UPSTREAM_REF + replayed active features + overlay.
 #
 # Env:
-#   UPSTREAM_REF  rebase base                       (default upstream/main)
-#   OVERLAY_REF   branch holding fork-owned files   (default origin/fork-overlay)
-#   OUT_REF       ref to write the rebuilt commit   (default refs/heads/main-alpha)
-#   COMPARE_REF   idempotency baseline tree         (default $OUT_REF)
+#   UPSTREAM_REF       rebase base                      (default upstream/main)
+#   FEATURE_BASE_REF   ref whose commits count as "already upstream" when
+#                      linearizing features            (default $UPSTREAM_REF)
+#   OVERLAY_REF        branch holding fork-owned files  (default origin/fork-overlay)
+#   OUT_REF            ref to write the rebuilt commit  (default refs/heads/main-alpha)
+#   COMPARE_REF        idempotency baseline tree        (default $OUT_REF)
+#
+# UPSTREAM_REF is the BASE the alpha sits on; FEATURE_BASE_REF is what gets
+# excluded from feature replay. They differ when the base is pinned to a release
+# tag (so the alpha only moves on upstream releases) while features are still
+# branched off bleeding-edge upstream/main: setting FEATURE_BASE_REF=upstream/main
+# keeps intervening post-release upstream commits OUT of the alpha (only genuine
+# feature commits replay onto the tag). Equal by default for plain main-based use.
 #
 # Reads fork-features.yml and fork-overlay-paths.txt from OVERLAY_REF.
 # Prints the new commit SHA, or NO_CHANGE if the rebuilt tree matches COMPARE_REF.
@@ -15,6 +24,7 @@
 set -euo pipefail
 
 UPSTREAM_REF="${UPSTREAM_REF:-upstream/main}"
+FEATURE_BASE_REF="${FEATURE_BASE_REF:-$UPSTREAM_REF}"
 OVERLAY_REF="${OVERLAY_REF:-origin/fork-overlay}"
 OUT_REF="${OUT_REF:-refs/heads/main-alpha}"
 COMPARE_REF="${COMPARE_REF:-$OUT_REF}"
@@ -72,7 +82,9 @@ while IFS=$'\t' read -r branch pr; do
   # Genuine feature commits only: --no-merges drops merge commits, and
   # --right-only --cherry-pick drops commits already upstream (by patch-id), so
   # the PR head branch can be replayed directly even though it contains merges.
-  commits="$(git rev-list --reverse --no-merges --right-only --cherry-pick "$UPSTREAM_REF...$ref")"
+  # Exclude against FEATURE_BASE_REF (= upstream/main in release-pinned mode) so
+  # post-release upstream commits are NOT replayed onto the release-tag base.
+  commits="$(git rev-list --reverse --no-merges --right-only --cherry-pick "$FEATURE_BASE_REF...$ref")"
   for c in $commits; do
     git cherry-pick --allow-empty "$c"
   done

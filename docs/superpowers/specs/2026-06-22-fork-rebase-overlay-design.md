@@ -198,13 +198,21 @@ cross-repo branch, so replayed content == PR content by construction.
 - **`mirror-upstream-release.yml`** (on push to `main-alpha` + dispatch): mirror upstream
   stable tags + published releases onto the fork (this fires `docker.yml`). Rewired →
   headroomlabs-ai.
+- **Release-pinned base (cadence control):** `main-alpha` rebases on the **latest upstream
+  stable release tag**, NOT `upstream/main` HEAD. Mirroring `main` still tracks
+  `upstream/main` every tick, but the alpha base is frozen between releases, so the rebuilt
+  tree is identical tick-to-tick → `sync.yml`'s idempotency guard reports `NO_CHANGE` → no
+  force-push → no alpha. The result: **one alpha per upstream release**, not one per upstream
+  commit. Feature replay still excludes against `upstream/main` (`FEATURE_BASE_REF`), so
+  post-release upstream commits never leak onto the tag base. (Earlier this rebased on
+  `upstream/main`, cutting an alpha on every upstream push — too fast.)
 - **Trigger matrix:**
-  - upstream main push → `sync.yml` (≤30 min cron) → `main` mirrored + `main-alpha`
-    rebuilt & force-pushed → `alpha-release` → `vX.Y.(Z+1)-alpha.(N+1)`.
-  - `main-alpha` push (feature work) → `alpha-release` → new alpha.
-  - upstream stable `vX.Y.Z` released → mirror publishes the stable tag (docker builds it)
-    + sync rebuilds onto the new base → next alpha = `vX.Y.(Z+1)-alpha.1` (base moved up,
-    no alpha tags exist yet for the new target).
+  - upstream main push → `sync.yml` mirrors `main` only; `main-alpha` rebuild is `NO_CHANGE`
+    (base tag unmoved) → **no alpha**.
+  - upstream stable `vX.Y.Z` released → sync rebases `main-alpha` onto the new tag + mirror
+    publishes the stable tag (docker builds it) → one alpha `vX.Y.(Z+1)-alpha.1`.
+  - `main-alpha` push from a fork-overlay / feature change → `alpha-release` → new alpha
+    (user-driven, low frequency).
 - **CD = Docker only:** `docker.yml` fires on `release: published` (works because releases
   use the PAT). `release.yml` (python package) disabled. `/readyz` must report the
   resolved release **tag** stamped at Docker build time, not the pyproject version.
