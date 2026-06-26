@@ -47,8 +47,11 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/headroomlabs-ai/headroom.git
           # Tags needed too: main-alpha now rebases on the latest upstream
-          # RELEASE TAG, not upstream/main HEAD.
-          git fetch upstream main --tags
+          # RELEASE TAG, not upstream/main HEAD. --force is required because the
+          # checkout (fetch-depth: 0) already pulled origin's tags, and the fork
+          # mirrors upstream's tag namespace — without --force every shared tag
+          # is "rejected (would clobber existing tag)" and the fetch exits 1.
+          git fetch upstream main --tags --force
           # All origin heads: fork-overlay (overlay source of truth) plus every
           # feature/PR head branch the manifest may reference.
           git fetch origin '+refs/heads/*:refs/remotes/origin/*'
