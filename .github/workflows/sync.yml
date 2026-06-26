@@ -1,0 +1,106 @@
+name: Sync (rebuild main-alpha)
+
+# Every 30 min:
+#   1. Mirror fork `main` := upstream/main HEAD — always, on every upstream
+#      commit (cheap; triggers no fork workflow).
+#   2. Rebuild main-alpha on the LATEST UPSTREAM RELEASE TAG (not upstream/main)
+#      + replayed active features + the fork overlay. Because the base is pinned
+#      to the release tag, the rebuilt tree only changes when upstream cuts a new
+#      release (or the fork overlay/features change) — so the idempotency guard
+#      reports NO_CHANGE between releases and main-alpha is NOT force-pushed,
+#      which means alpha-release.yml does NOT fire on every upstream main commit.
+#      One alpha per upstream release (the requested cadence), instead of one per
+#      upstream push.
+#
+# Runs from the default branch (main-alpha), where this file lives, so the
+# schedule fires. Uses SYNC_DEPLOY_KEY (NOT GITHUB_TOKEN) so the force-push to
+# main-alpha triggers alpha-release.yml / mirror-upstream-release.yml. The
+# rebuild engine (scripts/fork-rebuild.sh) reads fork-owned files from the
+# stable `fork-overlay` branch and copies them whole — never a merge — so it
+# cannot conflict.
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main-alpha
+          fetch-depth: 0
+          ssh-key: ${{ secrets.SYNC_DEPLOY_KEY }}
+
+      - name: Configure git + fetch refs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/headroomlabs-ai/headroom.git
+          # Tags needed too: main-alpha now rebases on the latest upstream
+          # RELEASE TAG, not upstream/main HEAD. --force is required because the
+          # checkout (fetch-depth: 0) already pulled origin's tags, and the fork
+          # mirrors upstream's tag namespace — without --force every shared tag
+          # is "rejected (would clobber existing tag)" and the fetch exits 1.
+          git fetch upstream main --tags --force
+          # All origin heads: fork-overlay (overlay source of truth) plus every
+          # feature/PR head branch the manifest may reference.
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*'
+
+      - name: Mirror origin/main := upstream/main
+        run: |
+          if [ "$(git rev-parse upstream/main)" != "$(git rev-parse origin/main)" ]; then
+            git push origin upstream/main:refs/heads/main --force
+            echo "mirrored main -> $(git rev-parse --short upstream/main)"
+          else
+            echo "main already current"
+          fi
+
+      - name: Rebuild main-alpha
+        env:
+          GH_TOKEN: ${{ secrets.FORK_RELEASE_PAT }}
+        run: |
+          git update-ref -d refs/heads/main-alpha-next 2>/dev/null || true
+
+          # Base = latest STABLE upstream release tag (queried directly from
+          # upstream), NOT upstream/main HEAD. This pins main-alpha to releases
+          # so it only moves — and only cuts an alpha — when upstream ships a new
+          # release. Same query alpha-release.yml uses for the version base, so
+          # the alpha tree and its version stay anchored to the same release.
+          base_tag="$(gh release list --repo headroomlabs-ai/headroom --limit 30 \
+            --json tagName,isPrerelease,isDraft \
+            -q '.[] | select(.isPrerelease == false and .isDraft == false) | .tagName' \
+            | sort -V | tail -1)"
+          if [ -z "$base_tag" ]; then
+            echo "::error::could not resolve a stable upstream release tag" >&2
+            exit 1
+          fi
+          echo "Rebuilding main-alpha on upstream release ${base_tag}"
+
+          # UPSTREAM_REF = the release tag (the base); FEATURE_BASE_REF =
+          # upstream/main so feature replay still excludes ALL upstream-main
+          # commits (post-release commits never leak onto the tag).
+          # COMPARE_REF = the live branch, so an unchanged rebuild is reported as
+          # NO_CHANGE and the temp ref is never created (no spurious alpha).
+          UPSTREAM_REF="$base_tag" FEATURE_BASE_REF=upstream/main \
+            OVERLAY_REF=origin/fork-overlay \
+            COMPARE_REF=origin/main-alpha OUT_REF=refs/heads/main-alpha-next \
+            bash scripts/fork-rebuild.sh
+
+      - name: Force-push main-alpha if changed
+        run: |
+          if git rev-parse -q --verify refs/heads/main-alpha-next >/dev/null 2>&1; then
+            git push origin refs/heads/main-alpha-next:refs/heads/main-alpha --force
+            echo "pushed rebuilt main-alpha"
+          else
+            echo "rebuild reported NO_CHANGE; nothing to push"
+          fi
