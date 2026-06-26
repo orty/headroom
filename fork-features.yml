@@ -9,4 +9,4 @@
 features:
   - branch: claude/docker-session-history-persist-ntw1t2
     upstream_pr: headroomlabs-ai/headroom#1118
-    active: true
+    active: false
