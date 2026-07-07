@@ -10,3 +10,9 @@ features:
   - branch: claude/docker-session-history-persist-ntw1t2
     upstream_pr: headroomlabs-ai/headroom#1118
     active: false
+  # Server-side GitHub Copilot ingress. Replays onto every alpha until the
+  # upstream PR is opened + merged; set upstream_pr to the PR ref then so it
+  # auto-drops on merge (fork catches up via the normal upstream sync).
+  - branch: feat/copilot-ingress
+    upstream_pr: null
+    active: true
