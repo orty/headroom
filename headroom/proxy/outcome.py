@@ -333,6 +333,18 @@ async def emit_request_outcome(handler: Any, outcome: RequestOutcome) -> None:
     from headroom.proxy.models import RequestLog
     from headroom.proxy.project_context import get_current_project
 
+    # GitHub Copilot ingress: requests routed to the Copilot API travel on the
+    # OpenAI/Anthropic wire, so handlers stamp the wire provider. Relabel to
+    # "copilot" here — the single outcome funnel — so the dashboard shows the
+    # real upstream instead of "OpenAI"/"Anthropic". Keyed on the per-request
+    # ContextVar so it never touches non-Copilot traffic.
+    from headroom.providers.copilot.ingress import copilot_routed
+
+    if copilot_routed() and outcome.provider in ("openai", "anthropic"):
+        import dataclasses
+
+        outcome = dataclasses.replace(outcome, provider="copilot")
+
     # Output-shaping savings ledger (counterfactual estimator). The shaper
     # tags each request's (arm, stratum) onto ``transforms_applied``; feed the
     # observed output tokens to the recorder so it can produce an honest

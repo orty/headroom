@@ -11,6 +11,11 @@ from urllib.parse import quote
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import Response
 
+from headroom.providers.copilot.ingress import (
+    copilot_upstream_base,
+    is_copilot_path,
+    is_copilot_request,
+)
 from headroom.proxy.handlers.openai import _resolve_codex_routing_headers
 
 logger = logging.getLogger("headroom.proxy.routes")
@@ -49,7 +54,14 @@ def _vertex_target_for_location(proxy: Any, location: str) -> str:
     return f"https://{location}-aiplatform.googleapis.com"
 
 
-def _select_passthrough_base_url(proxy: Any, headers: dict[str, str]) -> str:
+def _select_passthrough_base_url(proxy: Any, headers: dict[str, str], path: str = "") -> str:
+    # GitHub Copilot: route the Copilot surface to GitHub's Copilot API.
+    # Detection is per-request (Copilot editor headers or a Copilot session
+    # token) plus Copilot-exclusive paths (/_ping, /agents/*) that arrive with no
+    # markers. Both signals are unique to Copilot, so this is safe on a shared
+    # multi-provider proxy — Claude Code / OpenAI / Gemini traffic never matches.
+    if is_copilot_request(headers) or is_copilot_path(path):
+        return copilot_upstream_base(headers)
     # Codex CLI subscription mode hits a wide surface under
     # `/backend-api/*` (rate-limit polling, agent identity, JWT
     # refresh, cloud tasks). Without this branch the catchall
@@ -537,6 +549,27 @@ def register_provider_routes(app: FastAPI, proxy: Any) -> None:
     async def openai_responses(request: Request):
         return await proxy.handle_openai_responses(request)
 
+    # GitHub Copilot ingress. Copilot Chat targets CAPI's non-/v1 completion
+    # paths (`/chat/completions`, `/responses`). Route Copilot traffic through
+    # the compressing OpenAI handlers (which resolve the Copilot upstream); leave
+    # any non-Copilot caller on the pre-existing catch-all passthrough so their
+    # behavior is unchanged.
+    @app.post("/chat/completions")
+    async def copilot_chat_completions(request: Request):
+        if is_copilot_request(dict(request.headers)):
+            return await proxy.handle_openai_chat(request)
+        return await proxy.handle_passthrough(
+            request, _select_passthrough_base_url(proxy, dict(request.headers), request.url.path)
+        )
+
+    @app.post("/responses")
+    async def copilot_responses(request: Request):
+        if is_copilot_request(dict(request.headers)):
+            return await proxy.handle_openai_responses(request)
+        return await proxy.handle_passthrough(
+            request, _select_passthrough_base_url(proxy, dict(request.headers), request.url.path)
+        )
+
     @app.post("/v1/codex/responses")
     async def openai_v1_codex_responses(request: Request):
         return await proxy.handle_openai_responses(request)
@@ -1022,5 +1055,5 @@ def register_provider_routes(app: FastAPI, proxy: Any) -> None:
 
         return await proxy.handle_passthrough(
             request,
-            _select_passthrough_base_url(proxy, dict(request.headers)),
+            _select_passthrough_base_url(proxy, dict(request.headers), request.url.path),
         )
