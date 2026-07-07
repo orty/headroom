@@ -940,8 +940,6 @@ class StreamingMixin:
         3. Makes continuation requests until no memory tools remain
         4. Streams the final response to the client
         """
-        from fastapi.responses import Response, StreamingResponse
-
         session_key = session_key or self._get_session_key(body)
         self._active_streams.add(session_key)
 
@@ -1007,6 +1005,8 @@ class StreamingMixin:
         session_key: str,
     ) -> Response | StreamingResponse:
         """Actual streaming implementation, guarded by _stream_response's cleanup wrapper."""
+        from fastapi.responses import Response, StreamingResponse
+
         from headroom.proxy.helpers import MAX_SSE_BUFFER_SIZE
 
         # Identify the harness (codex / claude-code / aider / cursor /
