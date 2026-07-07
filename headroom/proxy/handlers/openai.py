@@ -2034,6 +2034,22 @@ class OpenAIHandlerMixin:
         original_client_messages = copy.deepcopy(messages)
         custom_upstream_base_url = _resolve_openai_upstream_base(request.headers)
         upstream_base_url = self._resolve_openai_upstream(request)
+        # GitHub Copilot ingress: a Copilot Chat / Copilot-CLI request (detected
+        # by editor headers or a Copilot session token) routes to GitHub's
+        # Copilot API instead of the default OpenAI host, unless an explicit
+        # x-headroom-base-url override is set. The client presents a valid Copilot
+        # bearer, forwarded verbatim; /v1 is stripped for Copilot hosts by
+        # build_copilot_upstream_url.
+        if custom_upstream_base_url is None:
+            from headroom.providers.copilot.ingress import (
+                copilot_upstream_base,
+                is_copilot_request,
+                mark_copilot_routed,
+            )
+
+            if is_copilot_request(request.headers):
+                upstream_base_url = copilot_upstream_base(request.headers)
+                mark_copilot_routed()
         handler_path_suffix = _resolve_openai_chat_handler_path(
             upstream_base_url,
             model,
@@ -3936,6 +3952,18 @@ class OpenAIHandlerMixin:
             url = "https://chatgpt.com/backend-api/codex/responses"
         else:
             upstream_base_url = _resolve_openai_upstream_base(request.headers)
+            # GitHub Copilot ingress (see handle_openai_chat): route Copilot
+            # responses-API traffic to GitHub's Copilot API.
+            if upstream_base_url is None:
+                from headroom.providers.copilot.ingress import (
+                    copilot_upstream_base,
+                    is_copilot_request,
+                    mark_copilot_routed,
+                )
+
+                if is_copilot_request(request.headers):
+                    upstream_base_url = copilot_upstream_base(request.headers)
+                    mark_copilot_routed()
             handler_path = (
                 _resolve_openai_handler_path(request.headers, handler_path=_OPENAI_RESPONSES_PATH)
                 if upstream_base_url is not None
