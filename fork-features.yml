@@ -16,3 +16,6 @@ features:
   - branch: feat/copilot-ingress
     upstream_pr: null
     active: true
+  - branch: claude/fix-active-streams-cleanup-leak-x7k2q9
+    upstream_pr: headroomlabs-ai/headroom#1864
+    active: true
