@@ -449,6 +449,25 @@ class AnthropicHandlerMixin:
         force_stream: bool = False,
     ) -> Response | StreamingResponse:
         """Handle Anthropic /v1/messages endpoint."""
+        # GitHub Copilot ingress: Copilot Chat sends Claude-family models as
+        # Anthropic Messages requests (POST /v1/messages). Route them to GitHub's
+        # Copilot API (which serves /v1/messages verbatim with the Copilot
+        # bearer) instead of api.anthropic.com, which 401s the Copilot token.
+        _copilot_route = False
+        if upstream_base_url is None:
+            from headroom.providers.copilot.ingress import (
+                copilot_upstream_base,
+                is_copilot_request,
+                mark_copilot_routed,
+            )
+
+            # Only genuine Copilot requests (Copilot editor headers or a Copilot
+            # session token) divert to the Copilot API. Claude Code / direct
+            # Anthropic traffic carries neither, so it stays on api.anthropic.com.
+            if is_copilot_request(request.headers):
+                upstream_base_url = copilot_upstream_base(request.headers)
+                _copilot_route = True
+                mark_copilot_routed()
         if not hasattr(self, "pipeline_extensions"):
             from headroom.pipeline import PipelineExtensionManager
 
@@ -2188,11 +2207,15 @@ class AnthropicHandlerMixin:
 
             # Direct Anthropic API, or a provider-compatible Anthropic
             # Messages endpoint such as Vertex AI publisher rawPredict.
-            url = (
-                build_copilot_upstream_url(upstream_base_url, request.url.path)
-                if upstream_base_url
-                else f"{self.ANTHROPIC_API_URL}/v1/messages"
-            )
+            if _copilot_route:
+                # Forward the path verbatim: GitHub's Copilot API serves
+                # /v1/messages WITH the /v1 prefix (unlike /chat/completions), so
+                # the build_copilot_upstream_url /v1-stripping must not apply.
+                url = f"{upstream_base_url}{request.url.path}"
+            elif upstream_base_url:
+                url = build_copilot_upstream_url(upstream_base_url, request.url.path)
+            else:
+                url = f"{self.ANTHROPIC_API_URL}/v1/messages"
             if upstream_base_url and request.url.query:
                 url = f"{url}?{request.url.query}"
 
