@@ -1,0 +1,18 @@
+# Fork feature registry. The rebuild (scripts/fork-rebuild.sh) replays each
+# feature whose upstream PR is still OPEN (or upstream_pr is null) AND
+# active != false. When the PR merges upstream, the feature stops replaying and
+# the fork delta shrinks (drop is keyed on the PR NUMBER, not the branch name).
+#
+# `branch` is the ACTUAL upstream PR head branch — the rebuild linearizes it on
+# the fly (drops merge commits and commits already upstream), so the fork always
+# replays current PR content. No separate pre-linearized branch to keep in sync.
+features:
+  - branch: claude/docker-session-history-persist-ntw1t2
+    upstream_pr: headroomlabs-ai/headroom#1118
+    active: false
+  # Server-side GitHub Copilot ingress. Replays onto every alpha until the
+  # upstream PR is opened + merged; set upstream_pr to the PR ref then so it
+  # auto-drops on merge (fork catches up via the normal upstream sync).
+  - branch: feat/copilot-ingress
+    upstream_pr: null
+    active: true
