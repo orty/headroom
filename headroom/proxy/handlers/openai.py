@@ -2623,6 +2623,20 @@ class OpenAIHandlerMixin:
 
         # Direct OpenAI API (no backend configured)
         upstream_base_url = _resolve_openai_upstream_base(request.headers)
+        # GitHub Copilot ingress: a Copilot Chat / Copilot-CLI request (detected
+        # by editor headers or a Copilot session token) routes to GitHub's
+        # Copilot API instead of the default OpenAI host. The client already
+        # presents a valid Copilot bearer, so headers are forwarded verbatim; the
+        # /v1 prefix is stripped for Copilot hosts by build_copilot_upstream_url.
+        if upstream_base_url is None:
+            from headroom.providers.copilot.ingress import (
+                copilot_ingress_enabled,
+                copilot_upstream_base,
+                is_copilot_request,
+            )
+
+            if is_copilot_request(request.headers) or copilot_ingress_enabled():
+                upstream_base_url = copilot_upstream_base(request.headers)
         handler_path = (
             _resolve_openai_handler_path(
                 request.headers, handler_path=_OPENAI_CHAT_COMPLETIONS_PATH
@@ -3413,6 +3427,17 @@ class OpenAIHandlerMixin:
             url = "https://chatgpt.com/backend-api/codex/responses"
         else:
             upstream_base_url = _resolve_openai_upstream_base(request.headers)
+            # GitHub Copilot ingress (see handle_openai_chat): route Copilot
+            # responses-API traffic to GitHub's Copilot API.
+            if upstream_base_url is None:
+                from headroom.providers.copilot.ingress import (
+                    copilot_ingress_enabled,
+                    copilot_upstream_base,
+                    is_copilot_request,
+                )
+
+                if is_copilot_request(request.headers) or copilot_ingress_enabled():
+                    upstream_base_url = copilot_upstream_base(request.headers)
             handler_path = (
                 _resolve_openai_handler_path(request.headers, handler_path=_OPENAI_RESPONSES_PATH)
                 if upstream_base_url is not None

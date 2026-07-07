@@ -11,6 +11,11 @@ from urllib.parse import quote
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import Response
 
+from headroom.providers.copilot.ingress import (
+    copilot_ingress_enabled,
+    copilot_upstream_base,
+    is_copilot_request,
+)
 from headroom.proxy.handlers.openai import _resolve_codex_routing_headers
 
 logger = logging.getLogger("headroom.proxy.routes")
@@ -50,6 +55,11 @@ def _vertex_target_for_location(proxy: Any, location: str) -> str:
 
 
 def _select_passthrough_base_url(proxy: Any, headers: dict[str, str]) -> str:
+    # GitHub Copilot ingress: Copilot Chat's control-plane calls (/models,
+    # /models/session, /agents/*) and any non-/v1 completion path arrive here.
+    # Route the whole Copilot surface to GitHub's Copilot API, verbatim.
+    if is_copilot_request(headers):
+        return copilot_upstream_base(headers)
     # Codex CLI subscription mode hits a wide surface under
     # `/backend-api/*` (rate-limit polling, agent identity, JWT
     # refresh, cloud tasks). Without this branch the catchall
@@ -67,6 +77,12 @@ def _select_passthrough_base_url(proxy: Any, headers: dict[str, str]) -> str:
         if azure_base:
             return azure_base.rstrip("/")
     provider_name = proxy.provider_runtime.model_metadata_provider(headers)
+    # Dedicated Copilot ingress: when this proxy is a Copilot CAPI override
+    # target, default the otherwise-OpenAI fallback to the Copilot upstream so
+    # marker-less Copilot traffic (the `/_ping` connectivity check, some
+    # `/agents/*` calls) routes to GitHub instead of 404ing against OpenAI.
+    if provider_name == "openai" and copilot_ingress_enabled():
+        return copilot_upstream_base(headers)
     return _api_target(proxy, provider_name)
 
 
@@ -536,6 +552,27 @@ def register_provider_routes(app: FastAPI, proxy: Any) -> None:
     @app.post("/v1/responses")
     async def openai_responses(request: Request):
         return await proxy.handle_openai_responses(request)
+
+    # GitHub Copilot ingress. Copilot Chat targets CAPI's non-/v1 completion
+    # paths (`/chat/completions`, `/responses`). Route Copilot traffic through
+    # the compressing OpenAI handlers (which resolve the Copilot upstream); leave
+    # any non-Copilot caller on the pre-existing catch-all passthrough so their
+    # behavior is unchanged.
+    @app.post("/chat/completions")
+    async def copilot_chat_completions(request: Request):
+        if is_copilot_request(dict(request.headers)) or copilot_ingress_enabled():
+            return await proxy.handle_openai_chat(request)
+        return await proxy.handle_passthrough(
+            request, _select_passthrough_base_url(proxy, dict(request.headers))
+        )
+
+    @app.post("/responses")
+    async def copilot_responses(request: Request):
+        if is_copilot_request(dict(request.headers)) or copilot_ingress_enabled():
+            return await proxy.handle_openai_responses(request)
+        return await proxy.handle_passthrough(
+            request, _select_passthrough_base_url(proxy, dict(request.headers))
+        )
 
     @app.post("/v1/codex/responses")
     async def openai_v1_codex_responses(request: Request):
