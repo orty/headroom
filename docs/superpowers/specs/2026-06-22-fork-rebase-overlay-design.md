@@ -119,6 +119,20 @@ Everything else currently diverging (~50 files: node_modules READMEs, `wiki/**`,
 `README.md`, etc.) is **noise from the old merge history** and is **reset to upstream**
 during migration — it is not fork-owned.
 
+> **`_version.py` / `release_version.py` — owned, then re-absorbed (delta reduction).**
+> These were briefly added to the overlay: `_version.py` for a `HEADROOM_VERSION` env
+> override (so `/readyz` reports the exact alpha tag) and `release_version.py` to widen
+> its regex to accept the `-alpha.N` tag. Overwrite-copy made them go **stale**: upstream
+> v0.31.0 grew `_version.py` with `normalize_release_version` / `format_version_label`
+> (imported by other modules) and added native `HEADROOM_VERSION` support in `get_version()`.
+> The stale copies shadowed upstream's → `ImportError` at container startup → the deployed
+> alpha crashed and ACA pinned traffic to the prior revision. Both customizations are now
+> upstream-native (env override built in; the fork computes alphas in `fork-alpha-version.sh`
+> and `version-sync.py` does not validate the version string), so both files were **dropped
+> from the overlay** — the crash is fixed and the delta shrinks. Lesson: overwrite-copying a
+> Python module upstream also edits is a standing staleness hazard; only own files upstream
+> won't touch.
+
 Overwrite semantics: if the base ships a same-named file the fork owns (e.g. its own
 `docker.yml`), the overlay copy wins last-write — a file copy, not a merge, so still
 conflict-free. The fork's version is authoritative; the tradeoff is the fork may shadow
