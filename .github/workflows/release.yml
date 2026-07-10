@@ -65,7 +65,18 @@ jobs:
       - name: Compute version
         id: ver
         run: |
-          python headroom/release_version.py
+          # On the fork's real triggers — release:published (alpha-release cuts
+          # vX.Y.(Z+1)-alpha.N; mirror cuts the stable vX.Y.Z) or workflow_dispatch
+          # with a version — MANUAL_VER already holds the exact version, so emit it
+          # directly. This avoids upstream release_version.py's strict semver parser,
+          # which rejects the fork's `-alpha.N` tags (the fork no longer owns/widens
+          # that file — it was a container-startup staleness hazard). Only the
+          # version-less dispatch path falls back to upstream's git-log derivation.
+          if [ -n "${MANUAL_VER}" ]; then
+            echo "version=${MANUAL_VER}" >> "$GITHUB_OUTPUT"
+          else
+            python headroom/release_version.py
+          fi
         env:
           MANUAL_VER: ${{ steps.manualver.outputs.value }}
 

@@ -127,11 +127,15 @@ during migration — it is not fork-owned.
 > (imported by other modules) and added native `HEADROOM_VERSION` support in `get_version()`.
 > The stale copies shadowed upstream's → `ImportError` at container startup → the deployed
 > alpha crashed and ACA pinned traffic to the prior revision. Both customizations are now
-> upstream-native (env override built in; the fork computes alphas in `fork-alpha-version.sh`
-> and `version-sync.py` does not validate the version string), so both files were **dropped
-> from the overlay** — the crash is fixed and the delta shrinks. Lesson: overwrite-copying a
-> Python module upstream also edits is a standing staleness hazard; only own files upstream
-> won't touch.
+> upstream-native (env override built in; the fork computes alphas in `fork-alpha-version.sh`),
+> so both files were **dropped from the overlay** — the crash is fixed and the delta shrinks.
+> One dependency had to move: `release.yml`'s `detect-version` used to run
+> `python headroom/release_version.py`, whose strict parser rejects `-alpha.N`; since the tag
+> IS the canonical version on a release event, that step now emits `${TAG#v}` directly (the
+> `MANUAL_VER` it already computes) and only falls back to `release_version.py` for a
+> version-less `workflow_dispatch`. Lesson: overwrite-copying a Python module upstream also
+> edits is a standing staleness hazard; own files upstream won't touch, and prefer wiring the
+> fork's fork-owned *workflows* over shadowing upstream *source*.
 
 Overwrite semantics: if the base ships a same-named file the fork owns (e.g. its own
 `docker.yml`), the overlay copy wins last-write — a file copy, not a merge, so still
