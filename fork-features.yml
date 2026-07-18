@@ -1,0 +1,25 @@
+# Fork feature registry. The rebuild (scripts/fork-rebuild.sh) replays each
+# feature whose upstream PR is still OPEN (or upstream_pr is null) AND
+# active != false. When the PR merges upstream, the feature stops replaying and
+# the fork delta shrinks (drop is keyed on the PR NUMBER, not the branch name).
+#
+# `branch` is the ACTUAL upstream PR head branch — the rebuild linearizes it on
+# the fly (drops merge commits and commits already upstream), so the fork always
+# replays current PR content. No separate pre-linearized branch to keep in sync.
+features:
+  - branch: claude/docker-session-history-persist-ntw1t2
+    upstream_pr: headroomlabs-ai/headroom#1118
+    active: false
+  # Server-side GitHub Copilot ingress — DEACTIVATED. Upstream now ships native
+  # Copilot proxy routing + auth (build_copilot_upstream_url / apply_copilot_api_auth
+  # in the OpenAI/Anthropic handlers) and fixed the token-swap defect this feature
+  # reintroduced (headroomlabs-ai/headroom#1879, closes #1813). Upstream also
+  # refactored select_passthrough_base_url out of proxy_routes.py, so this branch
+  # no longer applies. Routing/auth is handled upstream; only the "copilot" request
+  # relabeling is carried on separately (see feat/copilot-provider-label below).
+  - branch: feat/copilot-ingress
+    upstream_pr: null
+    active: false
+  - branch: claude/fix-active-streams-cleanup-leak-x7k2q9
+    upstream_pr: headroomlabs-ai/headroom#1864
+    active: true
