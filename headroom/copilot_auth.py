@@ -10,6 +10,7 @@ import logging
 import math
 import os
 import time
+from contextvars import ContextVar
 from ctypes import wintypes
 from dataclasses import dataclass
 from datetime import datetime
@@ -952,13 +953,37 @@ def _is_ghe_copilot_api_host(host: str) -> bool:
     )
 
 
+# Per-request flag: set when a request is routed to the GitHub Copilot API so
+# the single outcome funnel can label the provider "copilot" regardless of the
+# wire shape (OpenAI or Anthropic) the request travelled on. A ContextVar is
+# task-local, so it never bleeds across concurrent requests.
+_request_routed_to_copilot: ContextVar[bool] = ContextVar(
+    "_request_routed_to_copilot", default=False
+)
+
+
+def mark_request_routed_to_copilot() -> None:
+    """Flag the current request as routed to the GitHub Copilot API."""
+    _request_routed_to_copilot.set(True)
+
+
+def request_routed_to_copilot() -> bool:
+    """Return True when the current request was routed to the Copilot API."""
+    return _request_routed_to_copilot.get()
+
+
 def build_copilot_upstream_url(base_url: str, path: str) -> str:
     """Build an upstream URL, normalizing GitHub Copilot's non-/v1 path layout."""
 
     normalized_base = base_url.rstrip("/")
     normalized_path = path if path.startswith("/") else f"/{path}"
-    if is_copilot_api_url(normalized_base) and normalized_path.startswith("/v1/"):
-        normalized_path = normalized_path[3:]
+    if is_copilot_api_url(normalized_base):
+        # Single routing chokepoint for every Copilot surface (OpenAI
+        # chat/responses and Anthropic messages all build their upstream URL
+        # here), so mark the request for provider relabeling downstream.
+        mark_request_routed_to_copilot()
+        if normalized_path.startswith("/v1/"):
+            normalized_path = normalized_path[3:]
     return f"{normalized_base}{normalized_path}"
 
 
