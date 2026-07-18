@@ -986,7 +986,7 @@ def consume_request_routed_to_copilot() -> bool:
     is not mislabeled."""
     routed = _request_routed_to_copilot.get()
     if routed:
-        _request_routed_to_copilot.set(False)
+        reset_request_routed_to_copilot()
     return routed
 
 
@@ -1009,6 +1009,8 @@ def build_copilot_upstream_url(base_url: str, path: str) -> str:
         mark_request_routed_to_copilot()
         if normalized_path.startswith("/v1/"):
             normalized_path = normalized_path[3:]
+    else:
+        reset_request_routed_to_copilot()
     return f"{normalized_base}{normalized_path}"
 
 

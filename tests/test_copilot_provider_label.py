@@ -18,9 +18,9 @@ COPILOT = "https://api.githubcopilot.com"
 
 
 def _run_isolated(fn):
-    """Run ``fn`` in a fresh copy of the current context so the per-request
+    """Run ``fn`` in a fresh context so the per-request
     ContextVar set by one test never leaks into the next."""
-    return contextvars.copy_context().run(fn)
+    return contextvars.Context().run(fn)
 
 
 # --- chokepoint marking -----------------------------------------------------
@@ -37,6 +37,16 @@ def test_build_url_marks_request_routed_to_copilot() -> None:
 
 def test_build_url_does_not_mark_non_copilot_hosts() -> None:
     def scenario() -> bool:
+        copilot_auth.build_copilot_upstream_url("https://api.openai.com", "/v1/chat/completions")
+        return copilot_auth.request_routed_to_copilot()
+
+    assert _run_isolated(scenario) is False
+
+
+def test_build_url_clears_stale_flag_for_non_copilot_hosts() -> None:
+    def scenario() -> bool:
+        copilot_auth.build_copilot_upstream_url(COPILOT, "/v1/messages")
+        assert copilot_auth.request_routed_to_copilot() is True
         copilot_auth.build_copilot_upstream_url("https://api.openai.com", "/v1/chat/completions")
         return copilot_auth.request_routed_to_copilot()
 
