@@ -27,6 +27,9 @@ features:
   - branch: feat/copilot-provider-label
     upstream_pr: headroomlabs-ai/headroom#2377
     active: true
+  # Merged upstream (headroomlabs-ai/headroom#1864). Kept as historical record;
+  # set inactive so the parser skips it entirely (no ref resolution, no
+  # `gh pr view` call each rebuild) instead of resolving to MERGED and dropping.
   - branch: claude/fix-active-streams-cleanup-leak-x7k2q9
     upstream_pr: headroomlabs-ai/headroom#1864
-    active: true
+    active: false
