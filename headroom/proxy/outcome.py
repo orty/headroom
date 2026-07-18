@@ -339,9 +339,23 @@ async def emit_request_outcome(handler: Any, outcome: RequestOutcome) -> None:
     and is awaitable-compatible. We could lift this to a typing.Protocol
     if/when another contract surface emerges, but YAGNI.
     """
+    from headroom.copilot_auth import consume_request_routed_to_copilot
     from headroom.proxy.cost import _summarize_transforms
     from headroom.proxy.models import RequestLog
     from headroom.proxy.project_context import get_current_project
+
+    # GitHub Copilot: requests routed to the Copilot API travel on the OpenAI or
+    # Anthropic wire, so the handlers stamp the wire provider. Relabel to
+    # "copilot" here — the single outcome funnel — so the dashboard shows the
+    # real upstream instead of "openai"/"anthropic". Keyed on the per-request
+    # flag set in build_copilot_upstream_url; never touches non-Copilot traffic.
+    # Done before the 5xx guard so a failed Copilot request is attributed too.
+    # consume_* reads AND clears the flag (called unconditionally via short-circuit
+    # order) so it cannot leak onto a later outcome in the same execution context.
+    if consume_request_routed_to_copilot() and outcome.provider in ("openai", "anthropic"):
+        import dataclasses
+
+        outcome = dataclasses.replace(outcome, provider="copilot")
 
     # Upstream failure (>= 500, e.g. a 529 Overloaded surfaced after retry
     # exhaustion) must not feed the savings/cost/log success stats; that would
