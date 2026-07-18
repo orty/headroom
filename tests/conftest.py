@@ -30,6 +30,20 @@ def _scrub_developer_headroom_env(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_CUSTOM_HEADERS", raising=False)
 
 
+# The Copilot "routed to Copilot" flag is a module-global ContextVar that
+# build_copilot_upstream_url() sets as a side effect. Unit tests that call that
+# builder directly (or otherwise run in the shared root context) would leave it
+# set and mislabel a later test's request outcome as "copilot". Reset it around
+# every test so build-time side effects can't leak between tests.
+@pytest.fixture(autouse=True)
+def _reset_copilot_routing_flag():
+    from headroom.copilot_auth import reset_request_routed_to_copilot
+
+    reset_request_routed_to_copilot()
+    yield
+    reset_request_routed_to_copilot()
+
+
 # =============================================================================
 # Global test hooks
 # =============================================================================
