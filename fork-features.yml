@@ -23,10 +23,9 @@ features:
   # Label Copilot traffic as provider "copilot" in the dashboard outcome funnel
   # (Copilot rides the OpenAI/Anthropic wire, so it otherwise shows as those).
   # Minimal successor to the relabeling half of feat/copilot-ingress, rebased on
-  # upstream's native Copilot routing. Set upstream_pr once the PR is opened so it
-  # auto-drops on merge.
+  # upstream's native Copilot routing. Auto-drops once the upstream PR merges.
   - branch: feat/copilot-provider-label
-    upstream_pr: null
+    upstream_pr: headroomlabs-ai/headroom#2377
     active: true
   - branch: claude/fix-active-streams-cleanup-leak-x7k2q9
     upstream_pr: headroomlabs-ai/headroom#1864
