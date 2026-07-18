@@ -343,6 +343,19 @@ async def emit_request_outcome(handler: Any, outcome: RequestOutcome) -> None:
     from headroom.proxy.models import RequestLog
     from headroom.proxy.project_context import get_current_project
 
+    # GitHub Copilot: requests routed to the Copilot API travel on the OpenAI or
+    # Anthropic wire, so the handlers stamp the wire provider. Relabel to
+    # "copilot" here — the single outcome funnel — so the dashboard shows the
+    # real upstream instead of "openai"/"anthropic". Keyed on the per-request
+    # flag set in build_copilot_upstream_url; never touches non-Copilot traffic.
+    # Done before the 5xx guard so a failed Copilot request is attributed too.
+    from headroom.copilot_auth import request_routed_to_copilot
+
+    if request_routed_to_copilot() and outcome.provider in ("openai", "anthropic"):
+        import dataclasses
+
+        outcome = dataclasses.replace(outcome, provider="copilot")
+
     # Upstream failure (>= 500, e.g. a 529 Overloaded surfaced after retry
     # exhaustion) must not feed the savings/cost/log success stats; that would
     # let a failed request inflate the save-rate. Record it as failed and stop,
