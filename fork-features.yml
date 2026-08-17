@@ -34,3 +34,17 @@ features:
   - branch: claude/fix-active-streams-cleanup-leak-x7k2q9
     upstream_pr: headroomlabs-ai/headroom#1864
     active: false
+  # Return 502 instead of 200 when upstream connect retries are exhausted. The
+  # synthesized SSE error response (#1639) was built without a status_code, so
+  # Starlette defaulted it to 200 — indistinguishable to the Anthropic/OpenAI
+  # SDKs from a successful empty stream ("empty or malformed response (HTTP
+  # 200)"), and unretryable. Compression fails open on timeout, so a long
+  # conversation re-sends the same oversized body and re-hits it every retry:
+  # the session cannot recover while pointed at the proxy. Carries the two
+  # observability gaps that made it hard to diagnose — an
+  # upstream_connection_errors counter (that path forwards no upstream status)
+  # and HEADROOM_LOG_LEVEL (uvicorn's level was hardcoded). Auto-drops once the
+  # upstream PR merges.
+  - branch: fix/upstream-transport-error-status
+    upstream_pr: headroomlabs-ai/headroom#3083
+    active: true
