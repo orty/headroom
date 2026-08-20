@@ -43,8 +43,19 @@ features:
   # the session cannot recover while pointed at the proxy. Carries the two
   # observability gaps that made it hard to diagnose — an
   # upstream_connection_errors counter (that path forwards no upstream status)
-  # and HEADROOM_LOG_LEVEL (uvicorn's level was hardcoded). Auto-drops once the
-  # upstream PR merges.
+  # and HEADROOM_LOG_LEVEL (uvicorn's level was hardcoded).
+  #
+  # MERGED upstream (headroomlabs-ai/headroom#3083, 2026-08-20) as a3d9424d.
+  # Already auto-dropped by the rebuild's MERGED check; marked inactive so the
+  # parser skips it (no ref resolution, no `gh pr view` call each rebuild) and
+  # kept as historical record.
+  #
+  # NOTE — release-pin gap: a3d9424d landed AFTER v0.36.0 was cut, so it is in
+  # upstream/main but not in the release tag main-alpha rebases on. Re-activating
+  # cannot restore it: the replay filter (--right-only --cherry-pick against
+  # FEATURE_BASE_REF=upstream/main) drops the commit because its patch-id now
+  # matches upstream. The fix returns to main-alpha automatically when upstream
+  # cuts the next stable release containing it (~v0.37.0).
   - branch: fix/upstream-transport-error-status
     upstream_pr: headroomlabs-ai/headroom#3083
-    active: true
+    active: false
