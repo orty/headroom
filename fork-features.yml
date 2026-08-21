@@ -1,0 +1,61 @@
+# Fork feature registry. The rebuild (scripts/fork-rebuild.sh) replays each
+# feature whose upstream PR is still OPEN (or upstream_pr is null) AND
+# active != false. When the PR merges upstream, the feature stops replaying and
+# the fork delta shrinks (drop is keyed on the PR NUMBER, not the branch name).
+#
+# `branch` is the ACTUAL upstream PR head branch — the rebuild linearizes it on
+# the fly (drops merge commits and commits already upstream), so the fork always
+# replays current PR content. No separate pre-linearized branch to keep in sync.
+features:
+  - branch: claude/docker-session-history-persist-ntw1t2
+    upstream_pr: headroomlabs-ai/headroom#1118
+    active: false
+  # Server-side GitHub Copilot ingress — DEACTIVATED. Upstream now ships native
+  # Copilot proxy routing + auth (build_copilot_upstream_url / apply_copilot_api_auth
+  # in the OpenAI/Anthropic handlers) and fixed the token-swap defect this feature
+  # reintroduced (headroomlabs-ai/headroom#1879, closes #1813). Upstream also
+  # refactored select_passthrough_base_url out of proxy_routes.py, so this branch
+  # no longer applies. Routing/auth is handled upstream; only the "copilot" request
+  # relabeling is carried on separately (see feat/copilot-provider-label below).
+  - branch: feat/copilot-ingress
+    upstream_pr: null
+    active: false
+  # Label Copilot traffic as provider "copilot" in the dashboard outcome funnel.
+  # MERGED upstream (headroomlabs-ai/headroom#2377, 2026-07-18) — now shipped in
+  # upstream releases, so the fork gets it natively via the release-tag base.
+  # Kept as historical record; inactive so the parser skips it (no ref resolution,
+  # no `gh pr view` call each rebuild).
+  - branch: feat/copilot-provider-label
+    upstream_pr: headroomlabs-ai/headroom#2377
+    active: false
+  # Merged upstream (headroomlabs-ai/headroom#1864). Kept as historical record;
+  # set inactive so the parser skips it entirely (no ref resolution, no
+  # `gh pr view` call each rebuild) instead of resolving to MERGED and dropping.
+  - branch: claude/fix-active-streams-cleanup-leak-x7k2q9
+    upstream_pr: headroomlabs-ai/headroom#1864
+    active: false
+  # Return 502 instead of 200 when upstream connect retries are exhausted. The
+  # synthesized SSE error response (#1639) was built without a status_code, so
+  # Starlette defaulted it to 200 — indistinguishable to the Anthropic/OpenAI
+  # SDKs from a successful empty stream ("empty or malformed response (HTTP
+  # 200)"), and unretryable. Compression fails open on timeout, so a long
+  # conversation re-sends the same oversized body and re-hits it every retry:
+  # the session cannot recover while pointed at the proxy. Carries the two
+  # observability gaps that made it hard to diagnose — an
+  # upstream_connection_errors counter (that path forwards no upstream status)
+  # and HEADROOM_LOG_LEVEL (uvicorn's level was hardcoded).
+  #
+  # MERGED upstream (headroomlabs-ai/headroom#3083, 2026-08-20) as a3d9424d.
+  # Already auto-dropped by the rebuild's MERGED check; marked inactive so the
+  # parser skips it (no ref resolution, no `gh pr view` call each rebuild) and
+  # kept as historical record.
+  #
+  # NOTE — release-pin gap: a3d9424d landed AFTER v0.36.0 was cut, so it is in
+  # upstream/main but not in the release tag main-alpha rebases on. Re-activating
+  # cannot restore it: the replay filter (--right-only --cherry-pick against
+  # FEATURE_BASE_REF=upstream/main) drops the commit because its patch-id now
+  # matches upstream. The fix returns to main-alpha automatically when upstream
+  # cuts the next stable release containing it (~v0.37.0).
+  - branch: fix/upstream-transport-error-status
+    upstream_pr: headroomlabs-ai/headroom#3083
+    active: false
