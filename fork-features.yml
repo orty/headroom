@@ -59,3 +59,16 @@ features:
   - branch: fix/upstream-transport-error-status
     upstream_pr: headroomlabs-ai/headroom#3083
     active: false
+  # Drop a tool_reference naming the search tool itself. Anthropic can answer a
+  # match-all tool_search_tool_regex call (empty input) with a hit on its own
+  # server tool; Claude Code stores it in the session's loaded-tool set and
+  # replays it as a tool_reference in the tools array, so every later turn 400s
+  # with "Tool reference 'tool_search_tool_regex' not found in available tools".
+  # The history repair (#2805/#2971) walks messages only and cannot reach it,
+  # which is why /compact does not clear it and the session stays dead until the
+  # transcript is edited by hand. Hit in a real session on 2026-08-20: the
+  # main-thread turns kept succeeding and only the auto-compact side-requests
+  # 400'd. Auto-drops once the upstream PR merges.
+  - branch: fix/tool-search-self-reference
+    upstream_pr: headroomlabs-ai/headroom#3172
+    active: true
