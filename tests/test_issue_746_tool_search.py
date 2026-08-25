@@ -683,3 +683,46 @@ def test_reference_repair_is_a_noop_on_a_clean_tools_array() -> None:
     repaired, removed = strip_unsupported_tool_search_references(tools)
     assert removed == 0
     assert repaired is tools
+
+
+def test_reference_repair_keeps_a_deferred_tool_named_like_a_search_tool() -> None:
+    # A typeless client tool may legitimately be called "tool_search_tool_*".
+    # It is a normal reference target, not a search mechanism, so a reference to
+    # it must survive: the request carries no typed mechanism under that name.
+    # Matching on the name prefix alone would wrongly strip it.
+    deferred = {"name": "tool_search_tool_custom", "input_schema": {}}
+    tools = [
+        _SEARCH_TOOL,
+        deferred,
+        {"type": "tool_reference", "name": "tool_search_tool_custom"},
+    ]
+    repaired, removed = strip_unsupported_tool_search_references(tools)
+    assert removed == 0
+    assert repaired is tools
+
+
+def test_reference_repair_keeps_prefixed_reference_with_no_matching_mechanism() -> None:
+    # Prefix-shaped reference, but this request carries no typed search tool at
+    # all — there is nothing for it to be a self-reference to, so it is not ours
+    # to remove.  Dropping it here would delete a reference the request needs.
+    tools = [
+        {"name": "Bash", "input_schema": {}},
+        {"type": "tool_reference", "name": _TOOL_SEARCH_DEFAULT_NAME},
+    ]
+    repaired, removed = strip_unsupported_tool_search_references(tools)
+    assert removed == 0
+    assert repaired is tools
+
+
+def test_reference_repair_matches_mechanism_name_exactly() -> None:
+    # Scoped to the mechanism names actually present: the exact name goes, a
+    # merely prefix-sharing sibling stays.
+    tools = [
+        _SEARCH_TOOL,
+        {"type": "tool_reference", "name": _TOOL_SEARCH_DEFAULT_NAME},
+        {"type": "tool_reference", "name": _TOOL_SEARCH_DEFAULT_NAME + "_other"},
+    ]
+    repaired, removed = strip_unsupported_tool_search_references(tools)
+    assert removed == 1
+    kept_names = [t.get("name") for t in repaired if t.get("type") == "tool_reference"]
+    assert kept_names == [_TOOL_SEARCH_DEFAULT_NAME + "_other"]
