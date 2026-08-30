@@ -36,6 +36,9 @@ on:
 
 permissions:
   contents: read
+  # The health step below reads the repo's workflow list to detect upstream
+  # workflows that drifted back to `active` after a mirror.
+  actions: read
 
 concurrency:
   group: fork-sync
@@ -114,6 +117,11 @@ jobs:
             echo "::warning::${base_tag} predates upstream #2953 (${PIN_ESCAPE_COMMIT}); basing main-alpha on upstream/main $(git rev-parse --short upstream/main) until a release contains it"
           fi
 
+          # Hand the resolved base to the health step so it audits the SAME base
+          # this rebuild used, rather than recomputing and drifting from it.
+          echo "BASE_TAG=$base_tag" >> "$GITHUB_ENV"
+          echo "BASE_REF=$base_ref" >> "$GITHUB_ENV"
+
           # UPSTREAM_REF = the base (release tag, or upstream/main while the
           # escape above is engaged); FEATURE_BASE_REF = upstream/main so
           # feature replay still excludes ALL upstream-main commits
@@ -133,3 +141,106 @@ jobs:
           else
             echo "rebuild reported NO_CHANGE; nothing to push"
           fi
+
+      # Advisory only. Every check below WARNS and the step always exits 0: a
+      # drifted label or a stale branch must never fail the sync that keeps
+      # main-alpha current. Deliberately narrow — it reports the handful of
+      # conditions that have actually bitten this fork, so a warning here stays
+      # worth reading instead of becoming noise to scroll past.
+      - name: Fork health checks (advisory)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.FORK_RELEASE_PAT }}
+          UPSTREAM: headroomlabs-ai/headroom
+        run: |
+          set +e
+          warn() { echo "::warning::$*"; }
+
+          base_ref="${BASE_REF:-${BASE_TAG}}"
+          if [ -z "$base_ref" ]; then
+            echo "base ref unavailable (rebuild step did not run); skipping checks"
+            exit 0
+          fi
+          echo "auditing against base: ${base_ref}"
+
+          # Manifest as the parser sees it: branch, pr, active — including the
+          # inactive rows fork-rebuild.sh discards, which is the point.
+          git show origin/fork-overlay:fork-features.yml | tr -d '\r' | awk '
+            function flush() { if (branch != "") print branch "\t" pr "\t" active }
+            /^[[:space:]]*-[[:space:]]*branch:/ {
+              flush(); branch=$0; sub(/.*branch:[[:space:]]*/, "", branch)
+              pr="null"; active="true"; next
+            }
+            /^[[:space:]]*upstream_pr:/ { pr=$0; sub(/.*upstream_pr:[[:space:]]*/, "", pr); next }
+            /^[[:space:]]*active:/      { active=$0; sub(/.*active:[[:space:]]*/, "", active); next }
+            END { flush() }
+          ' > /tmp/manifest.tsv
+
+          while IFS=$'\t' read -r branch pr active; do
+            [ -z "$branch" ] && continue
+            state=""
+            if [ "$pr" != "null" ]; then
+              num="${pr##*#}"; repo="${pr%#*}"
+              state="$(gh pr view "$num" --repo "$repo" --json state -q .state 2>/dev/null)"
+            fi
+
+            # 1. Manifest drift, both directions.
+            if [ "$state" = "MERGED" ] && [ "$active" != "false" ]; then
+              warn "manifest: $branch ($pr) is MERGED upstream but still active:true — the rebuild resolves and drops it every run; set active:false to skip the per-run 'gh pr view'"
+            fi
+            if [ "$state" = "OPEN" ] && [ "$active" = "false" ]; then
+              warn "manifest: $branch ($pr) is still OPEN upstream but active:false — this feature is NOT being replayed into main-alpha"
+            fi
+
+            # 2. Release-pin gap. A merged fix the current base predates is in
+            #    neither the base nor the replay (--cherry-pick drops it once its
+            #    patch-id is in FEATURE_BASE_REF), so main-alpha silently lacks
+            #    it until a release catches up. Self-limiting: the ancestry test
+            #    starts passing the moment one does.
+            if [ "$state" = "MERGED" ]; then
+              mc="$(gh pr view "$num" --repo "$repo" --json mergeCommit -q .mergeCommit.oid 2>/dev/null)"
+              if [ -n "$mc" ] && git cat-file -e "$mc^{commit}" 2>/dev/null; then
+                if ! git merge-base --is-ancestor "$mc" "$base_ref" 2>/dev/null; then
+                  warn "release-pin gap: $pr merged upstream ($(echo "$mc" | cut -c1-8)) but the base ${base_ref} predates it — main-alpha does NOT carry this fix, and re-activating cannot restore it. Returns automatically when a release contains it."
+                fi
+              fi
+            fi
+
+            # 3. A stale PR head makes upstream CI grade the branch against an
+            #    old base; 25 is roughly where that started misleading reviewers.
+            if [ "$active" != "false" ] && git rev-parse -q --verify "origin/$branch" >/dev/null 2>&1; then
+              behind="$(git rev-list --count "origin/$branch..upstream/main" 2>/dev/null || echo 0)"
+              [ "${behind:-0}" -gt 25 ] && warn "stale branch: origin/$branch is ${behind} commits behind upstream/main — rebase so upstream CI grades it against a current base"
+            fi
+          done < /tmp/manifest.tsv
+
+          # 4. Upstream workflows drift back to `active` when a mirror introduces
+          #    a NEW one (the one-time disable only covered what existed then).
+          #    Keep-set mirrors KEEP in scripts/fork-rebuild.sh.
+          keep=" docker.yml release.yml deploy-to-aca.yml sync.yml alpha-release.yml mirror-upstream-release.yml "
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows" --paginate \
+            -q '.workflows[] | select(.state=="active") | .path' 2>/dev/null \
+          | while read -r p; do
+              case "$p" in
+                .github/workflows/*) ;;
+                *) continue ;;   # GitHub-managed (Copilot, Dependency Graph)
+              esac
+              b="${p##*/}"
+              case "$keep" in *" $b "*) continue ;; esac
+              warn "workflow drift: '${b}' is active but outside the fork keep-set — an upstream workflow re-enabled itself; disable it (gh workflow disable)"
+            done
+
+          # 5. The floor invariant: base + replayed features + exactly ONE
+          #    overlay commit, with that commit at the tip.
+          overlays="$(git log --oneline "${base_ref}..origin/main-alpha" --grep='fork: overlay' 2>/dev/null | wc -l)"
+          if [ "${overlays:-0}" -ne 1 ]; then
+            warn "floor invariant: expected exactly 1 'fork: overlay' commit above ${base_ref}, found ${overlays} — main-alpha may have been appended to instead of regenerated"
+          fi
+          tip_subject="$(git log -1 --format=%s origin/main-alpha 2>/dev/null)"
+          case "$tip_subject" in
+            "fork: overlay"*) ;;
+            *) warn "floor invariant: main-alpha tip is '${tip_subject}', expected the 'fork: overlay' commit" ;;
+          esac
+
+          echo "health checks complete (advisory; warnings above do not fail the sync)"
+          exit 0
