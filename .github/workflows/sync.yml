@@ -176,12 +176,14 @@ jobs:
             END { flush() }
           ' > /tmp/manifest.tsv
 
-          while IFS=$'\t' read -r branch pr active; do
+          # Read the manifest on FD 3, not stdin: `gh` drains stdin, which would
+          # swallow the remaining rows and silently audit only the first entry.
+          while IFS=$'\t' read -r branch pr active <&3; do
             [ -z "$branch" ] && continue
             state=""
             if [ "$pr" != "null" ]; then
               num="${pr##*#}"; repo="${pr%#*}"
-              state="$(gh pr view "$num" --repo "$repo" --json state -q .state 2>/dev/null)"
+              state="$(gh pr view "$num" --repo "$repo" --json state -q .state 2>/dev/null </dev/null)"
             fi
 
             # 1. Manifest drift, both directions.
@@ -198,7 +200,7 @@ jobs:
             #    it until a release catches up. Self-limiting: the ancestry test
             #    starts passing the moment one does.
             if [ "$state" = "MERGED" ]; then
-              mc="$(gh pr view "$num" --repo "$repo" --json mergeCommit -q .mergeCommit.oid 2>/dev/null)"
+              mc="$(gh pr view "$num" --repo "$repo" --json mergeCommit -q .mergeCommit.oid 2>/dev/null </dev/null)"
               if [ -n "$mc" ] && git cat-file -e "$mc^{commit}" 2>/dev/null; then
                 if ! git merge-base --is-ancestor "$mc" "$base_ref" 2>/dev/null; then
                   warn "release-pin gap: $pr merged upstream ($(echo "$mc" | cut -c1-8)) but the base ${base_ref} predates it — main-alpha does NOT carry this fix, and re-activating cannot restore it. Returns automatically when a release contains it."
@@ -212,7 +214,7 @@ jobs:
               behind="$(git rev-list --count "origin/$branch..upstream/main" 2>/dev/null || echo 0)"
               [ "${behind:-0}" -gt 25 ] && warn "stale branch: origin/$branch is ${behind} commits behind upstream/main — rebase so upstream CI grades it against a current base"
             fi
-          done < /tmp/manifest.tsv
+          done 3< /tmp/manifest.tsv
 
           # 4. Upstream workflows drift back to `active` when a mirror introduces
           #    a NEW one (the one-time disable only covered what existed then).
