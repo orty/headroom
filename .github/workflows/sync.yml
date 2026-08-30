@@ -162,6 +162,7 @@ jobs:
             exit 0
           fi
           echo "auditing against base: ${base_ref}"
+          echo "manifest rows: $(wc -l < /tmp/manifest.tsv 2>/dev/null || echo 0)"
 
           # Manifest as the parser sees it: branch, pr, active — including the
           # inactive rows fork-rebuild.sh discards, which is the point.
@@ -210,9 +211,16 @@ jobs:
 
             # 3. A stale PR head makes upstream CI grade the branch against an
             #    old base; 25 is roughly where that started misleading reviewers.
-            if [ "$active" != "false" ] && git rev-parse -q --verify "origin/$branch" >/dev/null 2>&1; then
-              behind="$(git rev-list --count "origin/$branch..upstream/main" 2>/dev/null || echo 0)"
-              [ "${behind:-0}" -gt 25 ] && warn "stale branch: origin/$branch is ${behind} commits behind upstream/main — rebase so upstream CI grades it against a current base"
+            if [ "$active" != "false" ]; then
+              if git rev-parse -q --verify "origin/$branch" >/dev/null 2>&1; then
+                behind="$(git rev-list --count "origin/$branch..upstream/main" 2>/dev/null || echo 0)"
+                echo "  staleness: origin/$branch is ${behind} behind upstream/main"
+                [ "${behind:-0}" -gt 25 ] && warn "stale branch: origin/$branch is ${behind} commits behind upstream/main — rebase so upstream CI grades it against a current base"
+              else
+                # Never skip in silence: an audit that quietly cannot see a ref
+                # reads exactly like an audit that found nothing wrong.
+                warn "stale check skipped: origin/$branch did not resolve — the feature ref is missing from this checkout, so its staleness could not be assessed"
+              fi
             fi
           done 3< /tmp/manifest.tsv
 
