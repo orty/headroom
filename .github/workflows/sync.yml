@@ -227,18 +227,26 @@ jobs:
                   | grep -qE '^(<<<<<<<|CONFLICT)' && conflict=yes
                 echo "  $branch: conflict=${conflict}; files also changed upstream=${n_overlap}"
 
-                # Rebase advice is gated on review state: force-pushing an
-                # approved PR can dismiss the approval under "dismiss stale
-                # reviews", so never recommend it for one already through review.
-                decision=""
-                [ "$pr" != "null" ] && decision="$(gh pr view "$num" --repo "$repo" --json reviewDecision -q .reviewDecision 2>/dev/null </dev/null)"
+                # Rebase advice is gated on review state: force-pushing a PR
+                # that carries an approval can dismiss it under "dismiss stale
+                # reviews". Key on whether an approving review EXISTS, not on
+                # the aggregate reviewDecision -- with CODEOWNERS still
+                # outstanding the aggregate reads REVIEW_REQUIRED even though a
+                # reviewer has approved, and gating on it told us to rebase a
+                # freshly approved PR.
+                decision=""; approvals=0
+                if [ "$pr" != "null" ]; then
+                  pr_json="$(gh pr view "$num" --repo "$repo" --json reviewDecision,latestReviews 2>/dev/null </dev/null)"
+                  decision="$(printf '%s' "$pr_json" | jq -r '.reviewDecision // ""' 2>/dev/null)"
+                  approvals="$(printf '%s' "$pr_json" | jq -r '[.latestReviews[]? | select(.state=="APPROVED")] | length' 2>/dev/null)"
+                fi
 
                 if [ "$conflict" = yes ]; then
                   # Cannot land as-is, so this outranks protecting an approval.
-                  warn "conflicting branch: origin/$branch no longer merges into upstream/main — must be rebased/resolved regardless of review state (currently: ${decision:-unreviewed})"
+                  warn "conflicting branch: origin/$branch no longer merges into upstream/main — must be rebased/resolved regardless of review state (decision=${decision:-unknown}, approvals=${approvals:-0})"
                 elif [ "${n_overlap:-0}" -gt 0 ]; then
-                  if [ "$decision" = "APPROVED" ]; then
-                    warn "drifted branch (APPROVED — do NOT rebase): upstream has changed ${n_overlap} file(s) this PR also edits ($(printf '%s' "$overlap" | tr '\n' ' ')). A force-push can dismiss the approval; raise the drift with the maintainer or let them merge as-is."
+                  if [ "${approvals:-0}" -gt 0 ]; then
+                    warn "drifted branch (${approvals} approving review(s); decision=${decision:-unknown} — do NOT rebase): upstream has changed ${n_overlap} file(s) this PR also edits ($(printf '%s' "$overlap" | tr '\n' ' ')). A force-push can dismiss the approval; raise the drift with the maintainer or let them merge as-is."
                   else
                     warn "drifted branch: upstream has changed ${n_overlap} file(s) this PR also edits ($(printf '%s' "$overlap" | tr '\n' ' ')) — rebase so CI and review see the real combined state"
                   fi
