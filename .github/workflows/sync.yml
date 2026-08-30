@@ -1,0 +1,256 @@
+name: Sync (rebuild main-alpha)
+
+# Every 30 min:
+#   1. Mirror fork `main` := upstream/main HEAD — always, on every upstream
+#      commit (cheap; triggers no fork workflow).
+#   2. Rebuild main-alpha on the LATEST UPSTREAM RELEASE TAG (not upstream/main)
+#      + replayed active features + the fork overlay. Because the base is pinned
+#      to the release tag, the rebuilt tree only changes when upstream cuts a new
+#      release (or the fork overlay/features change) — so the idempotency guard
+#      reports NO_CHANGE between releases and main-alpha is NOT force-pushed,
+#      which means alpha-release.yml does NOT fire on every upstream main commit.
+#      One alpha per upstream release (the requested cadence), instead of one per
+#      upstream push.
+#
+#      TEMPORARY ESCAPE (self-reverting, see PIN_ESCAPE_COMMIT below): the pin
+#      assumes "merged upstream" implies "in the base". That is false while
+#      upstream goes a long stretch without releasing, and the fork then has no
+#      way to reach a merged fix at all -- the feature-replay path cannot
+#      backport a MERGED PR (rev-list --right-only --cherry-pick yields nothing
+#      once its commits are in FEATURE_BASE_REF). That stranded us on upstream
+#      #2952 behind 67 unreleased commits. While the latest release still lacks
+#      the escape commit the base falls back to upstream/main; the step reverts
+#      itself to the release pin as soon as a release contains it.
+#
+# Runs from the default branch (main-alpha), where this file lives, so the
+# schedule fires. Uses SYNC_DEPLOY_KEY (NOT GITHUB_TOKEN) so the force-push to
+# main-alpha triggers alpha-release.yml / mirror-upstream-release.yml. The
+# rebuild engine (scripts/fork-rebuild.sh) reads fork-owned files from the
+# stable `fork-overlay` branch and copies them whole — never a merge — so it
+# cannot conflict.
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # The health step below reads the repo's workflow list to detect upstream
+  # workflows that drifted back to `active` after a mirror.
+  actions: read
+
+concurrency:
+  group: fork-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main-alpha
+          fetch-depth: 0
+          ssh-key: ${{ secrets.SYNC_DEPLOY_KEY }}
+
+      - name: Configure git + fetch refs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/headroomlabs-ai/headroom.git
+          # Tags needed too: main-alpha now rebases on the latest upstream
+          # RELEASE TAG, not upstream/main HEAD. --force is required because the
+          # checkout (fetch-depth: 0) already pulled origin's tags, and the fork
+          # mirrors upstream's tag namespace — without --force every shared tag
+          # is "rejected (would clobber existing tag)" and the fetch exits 1.
+          git fetch upstream main --tags --force
+          # All origin heads: fork-overlay (overlay source of truth) plus every
+          # feature/PR head branch the manifest may reference.
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*'
+
+      - name: Mirror origin/main := upstream/main
+        run: |
+          if [ "$(git rev-parse upstream/main)" != "$(git rev-parse origin/main)" ]; then
+            git push origin upstream/main:refs/heads/main --force
+            echo "mirrored main -> $(git rev-parse --short upstream/main)"
+          else
+            echo "main already current"
+          fi
+
+      - name: Rebuild main-alpha
+        env:
+          GH_TOKEN: ${{ secrets.FORK_RELEASE_PAT }}
+        run: |
+          git update-ref -d refs/heads/main-alpha-next 2>/dev/null || true
+
+          # Base = latest STABLE upstream release tag (queried directly from
+          # upstream), NOT upstream/main HEAD. This pins main-alpha to releases
+          # so it only moves — and only cuts an alpha — when upstream ships a new
+          # release. Same query alpha-release.yml uses for the version base, so
+          # the alpha tree and its version stay anchored to the same release.
+          base_tag="$(gh release list --repo headroomlabs-ai/headroom --limit 30 \
+            --json tagName,isPrerelease,isDraft \
+            -q '.[] | select(.isPrerelease == false and .isDraft == false) | .tagName' \
+            | sort -V | tail -1)"
+          if [ -z "$base_tag" ]; then
+            echo "::error::could not resolve a stable upstream release tag" >&2
+            exit 1
+          fi
+
+          # Self-reverting escape from the release pin. Keyed on CONTAINMENT of a
+          # specific upstream commit, not on a tag name or a date: the pin is only
+          # safe once a release actually carries the fix the fork is stranded on.
+          # PIN_ESCAPE_COMMIT = f1c34d33 (upstream #2953, "don't buffer a CCR
+          # stream when passthrough discards the stream flip"), which fixes the
+          # HTTP-200-with-no-body death of any Claude Code session running
+          # extended thinking. Merged 2026-08-13, unreleased as of v0.35.0. When
+          # upstream ships a release containing it this test flips on its own and
+          # the base returns to the release tag -- no follow-up commit and no
+          # scheduled reminder. Delete this block then; it is a no-op once true.
+          PIN_ESCAPE_COMMIT=f1c34d336cf35db341153c1c65e8c15219398340
+          if git merge-base --is-ancestor "$PIN_ESCAPE_COMMIT" "$base_tag" 2>/dev/null; then
+            base_ref="$base_tag"
+            echo "Rebuilding main-alpha on upstream release ${base_tag} (release pin active)"
+          else
+            base_ref=upstream/main
+            echo "::warning::${base_tag} predates upstream #2953 (${PIN_ESCAPE_COMMIT}); basing main-alpha on upstream/main $(git rev-parse --short upstream/main) until a release contains it"
+          fi
+
+          # Hand the resolved base to the health step so it audits the SAME base
+          # this rebuild used, rather than recomputing and drifting from it.
+          echo "BASE_TAG=$base_tag" >> "$GITHUB_ENV"
+          echo "BASE_REF=$base_ref" >> "$GITHUB_ENV"
+
+          # UPSTREAM_REF = the base (release tag, or upstream/main while the
+          # escape above is engaged); FEATURE_BASE_REF = upstream/main so
+          # feature replay still excludes ALL upstream-main commits
+          # (post-release commits never leak onto the tag).
+          # COMPARE_REF = the live branch, so an unchanged rebuild is reported as
+          # NO_CHANGE and the temp ref is never created (no spurious alpha).
+          UPSTREAM_REF="$base_ref" FEATURE_BASE_REF=upstream/main \
+            OVERLAY_REF=origin/fork-overlay \
+            COMPARE_REF=origin/main-alpha OUT_REF=refs/heads/main-alpha-next \
+            bash scripts/fork-rebuild.sh
+
+      - name: Force-push main-alpha if changed
+        run: |
+          if git rev-parse -q --verify refs/heads/main-alpha-next >/dev/null 2>&1; then
+            git push origin refs/heads/main-alpha-next:refs/heads/main-alpha --force
+            echo "pushed rebuilt main-alpha"
+          else
+            echo "rebuild reported NO_CHANGE; nothing to push"
+          fi
+
+      # Advisory only. Every check below WARNS and the step always exits 0: a
+      # drifted label or a stale branch must never fail the sync that keeps
+      # main-alpha current. Deliberately narrow — it reports the handful of
+      # conditions that have actually bitten this fork, so a warning here stays
+      # worth reading instead of becoming noise to scroll past.
+      - name: Fork health checks (advisory)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.FORK_RELEASE_PAT }}
+          UPSTREAM: headroomlabs-ai/headroom
+        run: |
+          set +e
+          warn() { echo "::warning::$*"; }
+
+          base_ref="${BASE_REF:-${BASE_TAG}}"
+          if [ -z "$base_ref" ]; then
+            echo "base ref unavailable (rebuild step did not run); skipping checks"
+            exit 0
+          fi
+          echo "auditing against base: ${base_ref}"
+          echo "manifest rows: $(wc -l < /tmp/manifest.tsv 2>/dev/null || echo 0)"
+
+          # Manifest as the parser sees it: branch, pr, active — including the
+          # inactive rows fork-rebuild.sh discards, which is the point.
+          git show origin/fork-overlay:fork-features.yml | tr -d '\r' | awk '
+            function flush() { if (branch != "") print branch "\t" pr "\t" active }
+            /^[[:space:]]*-[[:space:]]*branch:/ {
+              flush(); branch=$0; sub(/.*branch:[[:space:]]*/, "", branch)
+              pr="null"; active="true"; next
+            }
+            /^[[:space:]]*upstream_pr:/ { pr=$0; sub(/.*upstream_pr:[[:space:]]*/, "", pr); next }
+            /^[[:space:]]*active:/      { active=$0; sub(/.*active:[[:space:]]*/, "", active); next }
+            END { flush() }
+          ' > /tmp/manifest.tsv
+
+          # Read the manifest on FD 3, not stdin: `gh` drains stdin, which would
+          # swallow the remaining rows and silently audit only the first entry.
+          while IFS=$'\t' read -r branch pr active <&3; do
+            [ -z "$branch" ] && continue
+            state=""
+            if [ "$pr" != "null" ]; then
+              num="${pr##*#}"; repo="${pr%#*}"
+              state="$(gh pr view "$num" --repo "$repo" --json state -q .state 2>/dev/null </dev/null)"
+            fi
+
+            # 1. Manifest drift, both directions.
+            if [ "$state" = "MERGED" ] && [ "$active" != "false" ]; then
+              warn "manifest: $branch ($pr) is MERGED upstream but still active:true — the rebuild resolves and drops it every run; set active:false to skip the per-run 'gh pr view'"
+            fi
+            if [ "$state" = "OPEN" ] && [ "$active" = "false" ]; then
+              warn "manifest: $branch ($pr) is still OPEN upstream but active:false — this feature is NOT being replayed into main-alpha"
+            fi
+
+            # 2. Release-pin gap. A merged fix the current base predates is in
+            #    neither the base nor the replay (--cherry-pick drops it once its
+            #    patch-id is in FEATURE_BASE_REF), so main-alpha silently lacks
+            #    it until a release catches up. Self-limiting: the ancestry test
+            #    starts passing the moment one does.
+            if [ "$state" = "MERGED" ]; then
+              mc="$(gh pr view "$num" --repo "$repo" --json mergeCommit -q .mergeCommit.oid 2>/dev/null </dev/null)"
+              if [ -n "$mc" ] && git cat-file -e "$mc^{commit}" 2>/dev/null; then
+                if ! git merge-base --is-ancestor "$mc" "$base_ref" 2>/dev/null; then
+                  warn "release-pin gap: $pr merged upstream ($(echo "$mc" | cut -c1-8)) but the base ${base_ref} predates it — main-alpha does NOT carry this fix, and re-activating cannot restore it. Returns automatically when a release contains it."
+                fi
+              fi
+            fi
+
+            # 3. A stale PR head makes upstream CI grade the branch against an
+            #    old base; 25 is roughly where that started misleading reviewers.
+            if [ "$active" != "false" ]; then
+              if git rev-parse -q --verify "origin/$branch" >/dev/null 2>&1; then
+                behind="$(git rev-list --count "origin/$branch..upstream/main" 2>/dev/null || echo 0)"
+                echo "  staleness: origin/$branch is ${behind} behind upstream/main"
+                [ "${behind:-0}" -gt 25 ] && warn "stale branch: origin/$branch is ${behind} commits behind upstream/main — rebase so upstream CI grades it against a current base"
+              else
+                # Never skip in silence: an audit that quietly cannot see a ref
+                # reads exactly like an audit that found nothing wrong.
+                warn "stale check skipped: origin/$branch did not resolve — the feature ref is missing from this checkout, so its staleness could not be assessed"
+              fi
+            fi
+          done 3< /tmp/manifest.tsv
+
+          # 4. Upstream workflows drift back to `active` when a mirror introduces
+          #    a NEW one (the one-time disable only covered what existed then).
+          #    Keep-set mirrors KEEP in scripts/fork-rebuild.sh.
+          keep=" docker.yml release.yml deploy-to-aca.yml sync.yml alpha-release.yml mirror-upstream-release.yml "
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows" --paginate \
+            -q '.workflows[] | select(.state=="active") | .path' 2>/dev/null \
+          | while read -r p; do
+              case "$p" in
+                .github/workflows/*) ;;
+                *) continue ;;   # GitHub-managed (Copilot, Dependency Graph)
+              esac
+              b="${p##*/}"
+              case "$keep" in *" $b "*) continue ;; esac
+              warn "workflow drift: '${b}' is active but outside the fork keep-set — an upstream workflow re-enabled itself; disable it (gh workflow disable)"
+            done
+
+          # 5. The floor invariant: base + replayed features + exactly ONE
+          #    overlay commit, with that commit at the tip.
+          overlays="$(git log --oneline "${base_ref}..origin/main-alpha" --grep='fork: overlay' 2>/dev/null | wc -l)"
+          if [ "${overlays:-0}" -ne 1 ]; then
+            warn "floor invariant: expected exactly 1 'fork: overlay' commit above ${base_ref}, found ${overlays} — main-alpha may have been appended to instead of regenerated"
+          fi
+          tip_subject="$(git log -1 --format=%s origin/main-alpha 2>/dev/null)"
+          case "$tip_subject" in
+            "fork: overlay"*) ;;
+            *) warn "floor invariant: main-alpha tip is '${tip_subject}', expected the 'fork: overlay' commit" ;;
+          esac
+
+          echo "health checks complete (advisory; warnings above do not fail the sync)"
+          exit 0
