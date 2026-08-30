@@ -162,7 +162,6 @@ jobs:
             exit 0
           fi
           echo "auditing against base: ${base_ref}"
-          echo "manifest rows: $(wc -l < /tmp/manifest.tsv 2>/dev/null || echo 0)"
 
           # Manifest as the parser sees it: branch, pr, active — including the
           # inactive rows fork-rebuild.sh discards, which is the point.
@@ -176,6 +175,7 @@ jobs:
             /^[[:space:]]*active:/      { active=$0; sub(/.*active:[[:space:]]*/, "", active); next }
             END { flush() }
           ' > /tmp/manifest.tsv
+          echo "manifest rows: $(wc -l < /tmp/manifest.tsv)"
 
           # Read the manifest on FD 3, not stdin: `gh` drains stdin, which would
           # swallow the remaining rows and silently audit only the first entry.
