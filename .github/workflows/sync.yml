@@ -209,16 +209,41 @@ jobs:
               fi
             fi
 
-            # 3. A stale PR head makes upstream CI grade the branch against an
-            #    old base; 25 is roughly where that started misleading reviewers.
+            # 3. Staleness that ACTUALLY matters. A raw commit count is a bad
+            #    proxy -- upstream ships several releases a week, so a big number
+            #    is usually unrelated churn, while a single commit touching the
+            #    same function is a real problem. Report only two conditions:
+            #    the branch no longer merges, or upstream has since changed a
+            #    file this PR also edits.
             if [ "$active" != "false" ]; then
               if git rev-parse -q --verify "origin/$branch" >/dev/null 2>&1; then
-                behind="$(git rev-list --count "origin/$branch..upstream/main" 2>/dev/null || echo 0)"
-                echo "  staleness: origin/$branch is ${behind} behind upstream/main"
-                [ "${behind:-0}" -gt 25 ] && warn "stale branch: origin/$branch is ${behind} commits behind upstream/main — rebase so upstream CI grades it against a current base"
+                mb="$(git merge-base "origin/$branch" upstream/main 2>/dev/null)"
+                pr_files="$(git diff --name-only "$mb" "origin/$branch" 2>/dev/null)"
+                overlap=""
+                [ -n "$pr_files" ] && overlap="$(git diff --name-only "$mb" upstream/main -- $pr_files 2>/dev/null)"
+                n_overlap="$(printf '%s\n' "$overlap" | grep -c . || true)"
+                conflict=no
+                git merge-tree "$mb" upstream/main "origin/$branch" 2>/dev/null \
+                  | grep -qE '^(<<<<<<<|CONFLICT)' && conflict=yes
+                echo "  $branch: conflict=${conflict}; files also changed upstream=${n_overlap}"
+
+                # Rebase advice is gated on review state: force-pushing an
+                # approved PR can dismiss the approval under "dismiss stale
+                # reviews", so never recommend it for one already through review.
+                decision=""
+                [ "$pr" != "null" ] && decision="$(gh pr view "$num" --repo "$repo" --json reviewDecision -q .reviewDecision 2>/dev/null </dev/null)"
+
+                if [ "$conflict" = yes ]; then
+                  # Cannot land as-is, so this outranks protecting an approval.
+                  warn "conflicting branch: origin/$branch no longer merges into upstream/main — must be rebased/resolved regardless of review state (currently: ${decision:-unreviewed})"
+                elif [ "${n_overlap:-0}" -gt 0 ]; then
+                  if [ "$decision" = "APPROVED" ]; then
+                    warn "drifted branch (APPROVED — do NOT rebase): upstream has changed ${n_overlap} file(s) this PR also edits ($(printf '%s' "$overlap" | tr '\n' ' ')). A force-push can dismiss the approval; raise the drift with the maintainer or let them merge as-is."
+                  else
+                    warn "drifted branch: upstream has changed ${n_overlap} file(s) this PR also edits ($(printf '%s' "$overlap" | tr '\n' ' ')) — rebase so CI and review see the real combined state"
+                  fi
+                fi
               else
-                # Never skip in silence: an audit that quietly cannot see a ref
-                # reads exactly like an audit that found nothing wrong.
                 warn "stale check skipped: origin/$branch did not resolve — the feature ref is missing from this checkout, so its staleness could not be assessed"
               fi
             fi
