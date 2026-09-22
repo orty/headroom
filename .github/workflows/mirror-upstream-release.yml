@@ -1,0 +1,84 @@
+name: Mirror Upstream Releases
+
+# Mirrors upstream tags + published releases (headroomlabs-ai/headroom) onto the
+# fork. Creating the fork release is what fires `release: published`, which is
+# what triggers the Docker build/publish (docker.yml) and the Release workflow.
+#
+# IMPORTANT: the release is created via the GitHub API (`gh release create`),
+# NOT a git push, so an SSH deploy key cannot authenticate it. It must use a
+# Personal Access Token (secret FORK_RELEASE_PAT). Releases created with the
+# default GITHUB_TOKEN are deliberately suppressed by GitHub and do NOT fire
+# `release: published`, which would leave the Docker publish never triggered.
+#
+# Setup (one-time):
+#   1. Create a fine-grained PAT scoped to this repo with
+#        Repository permissions -> Contents: Read and write
+#      (covers both pushing tags and creating releases).
+#   2. Repo Settings -> Secrets and variables -> Actions -> New secret
+#        - name: FORK_RELEASE_PAT, value: the token
+
+on:
+  push:
+    branches: [main-alpha]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # PAT (not GITHUB_TOKEN) so the created release fires
+          # `release: published` and triggers the Docker publish.
+          token: ${{ secrets.FORK_RELEASE_PAT }}
+
+      - name: Mirror tags and releases from upstream
+        env:
+          GH_TOKEN: ${{ secrets.FORK_RELEASE_PAT }}
+          UPSTREAM: headroomlabs-ai/headroom
+          FORK: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          git remote add upstream "https://github.com/${UPSTREAM}.git"
+          git fetch upstream --tags --force
+
+          # Push all upstream tags to fork; existing tags are no-ops
+          git push origin --tags 2>/dev/null || true
+
+          # Mirror each published upstream release missing from fork.
+          # Tolerate HTTP 422 "already exists" from concurrent runs.
+          gh api "repos/${UPSTREAM}/releases?per_page=30" \
+            --paginate \
+            --jq '.[] | select(.draft == false) | {tag: .tag_name, name: .name, body: .body, prerelease: .prerelease}' \
+          | while IFS= read -r release; do
+            tag=$(echo "$release" | jq -r '.tag')
+
+            if gh api "repos/${FORK}/releases/tags/${tag}" &>/dev/null; then
+              echo "✓ ${tag} already mirrored"
+              continue
+            fi
+
+            echo "$release" | jq -r '.body // ""' > /tmp/release_notes.md
+            name=$(echo "$release" | jq -r '.name // .tag')
+            prerelease=$(echo "$release" | jq -r '.prerelease')
+
+            flags=()
+            [ "${prerelease}" = "true" ] && flags+=(--prerelease)
+
+            if output=$(gh release create "${tag}" \
+              --repo "${FORK}" \
+              --title "${name}" \
+              --notes-file /tmp/release_notes.md \
+              "${flags[@]}" 2>&1); then
+              echo "✓ Mirrored ${tag}"
+            elif echo "$output" | grep -qi "already.exist"; then
+              echo "⚠ ${tag} created by concurrent run, skipping"
+            else
+              echo "✗ Failed to mirror ${tag}: $output" && exit 1
+            fi
+          done
