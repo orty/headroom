@@ -6,6 +6,15 @@
 # `branch` is the ACTUAL upstream PR head branch — the rebuild linearizes it on
 # the fly (drops merge commits and commits already upstream), so the fork always
 # replays current PR content. No separate pre-linearized branch to keep in sync.
+#
+# EXCEPTION — that holds only while on-the-fly linearization loses nothing. The
+# rebuild replays with `--no-merges`, so once a PR needs conflict resolution
+# against a moved upstream, the resolution lives in a merge commit the replay
+# drops and the rebuild fails (fork-rebuild.sh's own precondition: "Feature
+# branches must be linear"). Such an entry points `branch` at a fork-local
+# linear branch carrying the resolved patch; `upstream_pr` still names the real
+# PR, so the MERGED auto-drop is unaffected. Regenerate that branch whenever the
+# PR gains commits.
 features:
   - branch: claude/docker-session-history-persist-ntw1t2
     upstream_pr: headroomlabs-ai/headroom#1118
@@ -69,6 +78,9 @@ features:
   # transcript is edited by hand. Hit in a real session on 2026-08-20: the
   # main-thread turns kept succeeding and only the auto-compact side-requests
   # 400'd. Auto-drops once the upstream PR merges.
-  - branch: fix/tool-search-self-reference
+  # Replayed from a LINEAR branch (see EXCEPTION above), not the PR head: upstream
+  # #3457 (68359c05, in v0.38.0) rewrote the same region of helpers.py, so the PR
+  # head only applies through a merge commit that `--no-merges` discards.
+  - branch: fix/tool-search-self-reference-linear
     upstream_pr: headroomlabs-ai/headroom#3172
     active: true
