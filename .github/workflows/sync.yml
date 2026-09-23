@@ -209,6 +209,33 @@ jobs:
               fi
             fi
 
+            # 2b. Stand-in branch drift. When `branch` is a fork-local linear
+            #     stand-in rather than the PR head (see the EXCEPTION note in
+            #     fork-features.yml), nothing ties the two together: if the PR
+            #     gains a commit, main-alpha keeps replaying the old patch while
+            #     the PR shows the new one. Compare the feature's changed lines
+            #     (-U0, measured from each ref's merge-base with upstream/main, so
+            #     a merge of main into the PR does not count as a difference).
+            if [ "$state" = "OPEN" ] && [ "$active" != "false" ]; then
+              head_ref="$(gh pr view "$num" --repo "$repo" --json headRefName -q .headRefName 2>/dev/null </dev/null)"
+              if [ -n "$head_ref" ] && [ "$head_ref" != "$branch" ]; then
+                feat_sig() {
+                  mb="$(git merge-base "$1" upstream/main 2>/dev/null)" || return 1
+                  git diff -U0 --no-color --no-ext-diff "$mb" "$1" | grep -E '^[+-]' | sha256sum | cut -c1-12
+                }
+                if git fetch -q upstream "+refs/pull/${num}/head:refs/pr/${num}" 2>/dev/null \
+                   && git rev-parse -q --verify "origin/$branch" >/dev/null 2>&1; then
+                  sig_pr="$(feat_sig "refs/pr/${num}")"; sig_lin="$(feat_sig "origin/$branch")"
+                  echo "  $branch: stand-in for ${head_ref}; feature sig pr=${sig_pr} stand-in=${sig_lin}"
+                  if [ -z "$sig_pr" ] || [ "$sig_pr" != "$sig_lin" ]; then
+                    warn "stand-in drift: $branch no longer carries the same change as $pr (head ${head_ref} @ $(git rev-parse --short "refs/pr/${num}")) — main-alpha is replaying a stale patch. Regenerate the stand-in from the PR head onto the current base."
+                  fi
+                else
+                  warn "stand-in check skipped: could not fetch $pr head or resolve origin/$branch"
+                fi
+              fi
+            fi
+
             # 3. Staleness that ACTUALLY matters. A raw commit count is a bad
             #    proxy -- upstream ships several releases a week, so a big number
             #    is usually unrelated churn, while a single commit touching the
