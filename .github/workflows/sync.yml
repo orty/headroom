@@ -182,6 +182,9 @@ jobs:
           while IFS=$'\t' read -r branch pr active <&3; do
             [ -z "$branch" ] && continue
             state=""
+            # The ref check 3 audits. Normally the manifest branch; check 2b
+            # swaps in the real PR head when `branch` is a linear stand-in.
+            audit_ref="origin/$branch"
             if [ "$pr" != "null" ]; then
               num="${pr##*#}"; repo="${pr%#*}"
               state="$(gh pr view "$num" --repo "$repo" --json state -q .state 2>/dev/null </dev/null)"
@@ -225,6 +228,7 @@ jobs:
                 }
                 if git fetch -q upstream "+refs/pull/${num}/head:refs/pr/${num}" 2>/dev/null \
                    && git rev-parse -q --verify "origin/$branch" >/dev/null 2>&1; then
+                  audit_ref="refs/pr/${num}"
                   sig_pr="$(feat_sig "refs/pr/${num}")"; sig_lin="$(feat_sig "origin/$branch")"
                   echo "  $branch: stand-in for ${head_ref}; feature sig pr=${sig_pr} stand-in=${sig_lin}"
                   if [ -z "$sig_pr" ] || [ "$sig_pr" != "$sig_lin" ]; then
@@ -242,17 +246,21 @@ jobs:
             #    same function is a real problem. Report only two conditions:
             #    the branch no longer merges, or upstream has since changed a
             #    file this PR also edits.
+            #    Audit the PR as reviewers and upstream CI see it: for a linear
+            #    stand-in, that is the PR head (audit_ref, set by 2b), not the
+            #    stand-in -- which sits on the release base, so it always looks
+            #    "behind" and would ask to rebase a PR that is already current.
             if [ "$active" != "false" ]; then
-              if git rev-parse -q --verify "origin/$branch" >/dev/null 2>&1; then
-                mb="$(git merge-base "origin/$branch" upstream/main 2>/dev/null)"
-                pr_files="$(git diff --name-only "$mb" "origin/$branch" 2>/dev/null)"
+              if git rev-parse -q --verify "$audit_ref" >/dev/null 2>&1; then
+                mb="$(git merge-base "$audit_ref" upstream/main 2>/dev/null)"
+                pr_files="$(git diff --name-only "$mb" "$audit_ref" 2>/dev/null)"
                 overlap=""
                 [ -n "$pr_files" ] && overlap="$(git diff --name-only "$mb" upstream/main -- $pr_files 2>/dev/null)"
                 n_overlap="$(printf '%s\n' "$overlap" | grep -c . || true)"
                 conflict=no
-                git merge-tree "$mb" upstream/main "origin/$branch" 2>/dev/null \
+                git merge-tree "$mb" upstream/main "$audit_ref" 2>/dev/null \
                   | grep -qE '^(<<<<<<<|CONFLICT)' && conflict=yes
-                echo "  $branch: conflict=${conflict}; files also changed upstream=${n_overlap}"
+                echo "  $branch (audited ${audit_ref}): conflict=${conflict}; files also changed upstream=${n_overlap}"
 
                 # Rebase advice is gated on review state: force-pushing a PR
                 # that carries an approval can dismiss it under "dismiss stale
@@ -270,7 +278,7 @@ jobs:
 
                 if [ "$conflict" = yes ]; then
                   # Cannot land as-is, so this outranks protecting an approval.
-                  warn "conflicting branch: origin/$branch no longer merges into upstream/main — must be rebased/resolved regardless of review state (decision=${decision:-unknown}, approvals=${approvals:-0})"
+                  warn "conflicting branch: ${audit_ref} no longer merges into upstream/main — must be rebased/resolved regardless of review state (decision=${decision:-unknown}, approvals=${approvals:-0})"
                 elif [ "${n_overlap:-0}" -gt 0 ]; then
                   if [ "${approvals:-0}" -gt 0 ]; then
                     warn "drifted branch (${approvals} approving review(s); decision=${decision:-unknown} — do NOT rebase): upstream has changed ${n_overlap} file(s) this PR also edits ($(printf '%s' "$overlap" | tr '\n' ' ')). A force-push can dismiss the approval; raise the drift with the maintainer or let them merge as-is."
@@ -279,7 +287,7 @@ jobs:
                   fi
                 fi
               else
-                warn "stale check skipped: origin/$branch did not resolve — the feature ref is missing from this checkout, so its staleness could not be assessed"
+                warn "stale check skipped: ${audit_ref} did not resolve — the feature ref is missing from this checkout, so its staleness could not be assessed"
               fi
             fi
           done 3< /tmp/manifest.tsv
