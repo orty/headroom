@@ -143,8 +143,10 @@ jobs:
 
       - name: Export digest
         id: digest
-        env:
-          BAKE_METADATA: ${{ steps.bake.outputs.metadata }}
+        # No `env:` copy of the metadata. The script never read it, and the
+        # runner still has to put it in the environment: bake metadata is
+        # large and varies per build, and past the per-variable limit the
+        # step cannot even start ("Argument list too long", no bash output).
         run: |
           # Bake's metadata is one entry per target; for a single-target
           # single-platform build it has exactly one digest. Pipe the
