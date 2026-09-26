@@ -20,7 +20,14 @@
 # Prints the new commit SHA, or NO_CHANGE if the rebuilt tree matches COMPARE_REF.
 #
 # Overlay files are COPIED whole (never merged), so the rebuild cannot conflict.
-# Feature branches must be linear (no merge commits).
+#
+# Features replay commit by commit. If that conflicts -- the base moved under an
+# older commit, or the PR's conflict resolution lives in a merge commit that
+# --no-merges drops -- the feature is rolled back and replayed ONCE MORE as a
+# single commit carrying its net change: the diff from its merge-base with
+# FEATURE_BASE_REF to its current head, applied 3-way. For a feature with an
+# upstream PR the head is refs/pull/N/head, i.e. exactly what reviewers see.
+# Only if that conflicts too does the rebuild fail.
 set -euo pipefail
 
 UPSTREAM_REF="${UPSTREAM_REF:-upstream/main}"
@@ -85,9 +92,42 @@ while IFS=$'\t' read -r branch pr; do
   # Exclude against FEATURE_BASE_REF (= upstream/main in release-pinned mode) so
   # post-release upstream commits are NOT replayed onto the release-tag base.
   commits="$(git rev-list --reverse --no-merges --right-only --cherry-pick "$FEATURE_BASE_REF...$ref")"
+  start="$(git rev-parse HEAD)"
+  failed=""
   for c in $commits; do
-    git cherry-pick --allow-empty "$c"
+    if ! git cherry-pick --allow-empty "$c" >/dev/null 2>&1; then
+      failed="$c"
+      git cherry-pick --abort 2>/dev/null || true
+      break
+    fi
   done
+  [ -z "$failed" ] && continue
+
+  # Fallback: net change of the feature's current head, as one commit.
+  git reset -q --hard "$start"
+  src="$ref"; label="$branch"
+  if [ "$pr" != "null" ]; then
+    if git fetch -q "https://github.com/${repo}.git" "+refs/pull/${num}/head:refs/fork-rebuild/pr/${num}" 2>/dev/null; then
+      src="refs/fork-rebuild/pr/${num}"; label="$pr"
+    else
+      echo "::warning::could not fetch ${pr} head; using ${ref} for the net-change replay" >&2
+    fi
+  fi
+  mb="$(git merge-base "$src" "$FEATURE_BASE_REF")"
+  git diff --binary "$mb" "$src" > "$tmpdir/net.patch"
+  if [ ! -s "$tmpdir/net.patch" ]; then
+    echo "::notice::${branch}: net change of ${label} is empty; nothing to replay" >&2
+    continue
+  fi
+  if ! git apply --3way --index "$tmpdir/net.patch" >/dev/null 2>"$tmpdir/apply.err"; then
+    echo "::error::${branch}: commit $(git rev-parse --short "$failed") conflicts, and the net change of ${label} does not apply on $(git rev-parse --short "$UPSTREAM_REF") either. Conflicting files:" >&2
+    git diff --name-only --diff-filter=U >&2 || true
+    cat "$tmpdir/apply.err" >&2
+    exit 1
+  fi
+  subject="$(git log -1 --format=%s "$(echo "$commits" | head -1)")"
+  git commit -q -m "$subject" -m "Net change of ${label} at $(git rev-parse --short "$src"), replayed as one commit: commit $(git rev-parse --short "$failed") did not apply on this base."
+  echo "::warning::${branch}: commit replay conflicted at $(git rev-parse --short "$failed"); replayed the net change of ${label} ($(git rev-parse --short "$src")) as one commit instead" >&2
 done < "$tmpdir/active.txt"
 
 # 2. Copy fork-owned files whole from the overlay ref (never a merge).

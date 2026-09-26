@@ -128,10 +128,16 @@ jobs:
           # (post-release commits never leak onto the tag).
           # COMPARE_REF = the live branch, so an unchanged rebuild is reported as
           # NO_CHANGE and the temp ref is never created (no spurious alpha).
+          # Run the rebuild engine from the SAME ref it reads the manifest from.
+          # The checkout is main-alpha, whose copy of the script is one rebuild
+          # old: a script change shipped together with a manifest change that
+          # needs it would otherwise pair the old engine with the new manifest,
+          # fail, and never rebuild main-alpha to pick the new engine up.
+          git show origin/fork-overlay:scripts/fork-rebuild.sh > "$RUNNER_TEMP/fork-rebuild.sh"
           UPSTREAM_REF="$base_ref" FEATURE_BASE_REF=upstream/main \
             OVERLAY_REF=origin/fork-overlay \
             COMPARE_REF=origin/main-alpha OUT_REF=refs/heads/main-alpha-next \
-            bash scripts/fork-rebuild.sh
+            bash "$RUNNER_TEMP/fork-rebuild.sh"
 
       - name: Force-push main-alpha if changed
         run: |
