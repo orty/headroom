@@ -7,14 +7,12 @@
 # the fly (drops merge commits and commits already upstream), so the fork always
 # replays current PR content. No separate pre-linearized branch to keep in sync.
 #
-# EXCEPTION — that holds only while on-the-fly linearization loses nothing. The
-# rebuild replays with `--no-merges`, so once a PR needs conflict resolution
-# against a moved upstream, the resolution lives in a merge commit the replay
-# drops and the rebuild fails (fork-rebuild.sh's own precondition: "Feature
-# branches must be linear"). Such an entry points `branch` at a fork-local
-# linear branch carrying the resolved patch; `upstream_pr` still names the real
-# PR, so the MERGED auto-drop is unaffected. Regenerate that branch whenever the
-# PR gains commits.
+# When commit-by-commit replay conflicts (the base moved under an older commit,
+# or the PR's conflict resolution lives in a merge commit that `--no-merges`
+# drops), the rebuild falls back on its own: it replays the net change of the
+# PR head (refs/pull/N/head) as one commit, and the sync shows a warning saying
+# so. Hand-made linear stand-in branches are no longer needed; only a conflict
+# the net change cannot resolve either still fails the sync.
 features:
   - branch: claude/docker-session-history-persist-ntw1t2
     upstream_pr: headroomlabs-ai/headroom#1118
@@ -78,9 +76,10 @@ features:
   # transcript is edited by hand. Hit in a real session on 2026-08-20: the
   # main-thread turns kept succeeding and only the auto-compact side-requests
   # 400'd. Auto-drops once the upstream PR merges.
-  # Replayed from a LINEAR branch (see EXCEPTION above), not the PR head: upstream
-  # #3457 (68359c05, in v0.38.0) rewrote the same region of helpers.py, so the PR
-  # head only applies through a merge commit that `--no-merges` discards.
-  - branch: fix/tool-search-self-reference-linear
+  # Upstream #3457 (68359c05, in v0.38.0) rewrote the same region of helpers.py,
+  # so this PR's early commits no longer replay one by one; the rebuild uses its
+  # net-change fallback. (Was fix/tool-search-self-reference-linear, a hand-made
+  # stand-in, until the fallback existed.)
+  - branch: fix/tool-search-self-reference
     upstream_pr: headroomlabs-ai/headroom#3172
     active: true
