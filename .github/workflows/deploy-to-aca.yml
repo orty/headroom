@@ -125,11 +125,19 @@ jobs:
           # session-persist feature, not this floor) never promotes it to a
           # runtime ENV, so set it on the container app here. _version.py reads
           # this env first (its existing override).
+          #
+          # HEADROOM_HOST=0.0.0.0: since v0.39.0 (upstream #3316) the image
+          # defaults to binding 127.0.0.1, which the ACA ingress cannot reach
+          # from outside the container -- every request then fails, and large
+          # ones come back as Envoy's "507 exceeded request buffer limit while
+          # retrying upstream". Pin the pre-0.39 bind here so the setting lives
+          # in the repo, not only on the container app. This leaves /v1/*
+          # unauthenticated unless HEADROOM_PROXY_TOKEN is also set.
           az containerapp update \
             --name "${ACA_NAME}" \
             --resource-group "${ACA_RG}" \
             --image "${IMAGE}" \
             --revision-suffix "${SUFFIX}" \
-            --set-env-vars "HEADROOM_VERSION=${TAG}"
+            --set-env-vars "HEADROOM_VERSION=${TAG}" "HEADROOM_HOST=0.0.0.0"
 
           echo "✓ Deployed ${IMAGE} → revision suffix ${SUFFIX}"
