@@ -2,10 +2,11 @@
 # feature with active != false whose upstream PR is OPEN (or upstream_pr is
 # null). A MERGED PR keeps being carried -- exactly the change upstream merged --
 # until the release base contains its merge commit; only then does it drop and
-# the fork delta shrink (keyed on the PR NUMBER, not the branch name). Retire
-# the entry (active: false, kept as history) once the sync's health check says
-# the base contains it. Setting active: false earlier would drop the fix from
-# main-alpha until the next release.
+# the fork delta shrink (keyed on the PR NUMBER, not the branch name). Retiring
+# the entry is automatic: in the sync run whose base first contains the merge,
+# scripts/fork-retire.sh sets active: false and adds a history note,
+# committed to fork-overlay. Setting active: false by hand earlier would drop
+# the fix from main-alpha until the next release.
 #
 # `branch` is the ACTUAL upstream PR head branch — the rebuild linearizes it on
 # the fly (drops merge commits and commits already upstream), so the fork always
@@ -85,7 +86,7 @@ features:
   # net-change fallback. (Was fix/tool-search-self-reference-linear, a hand-made
   # stand-in, until the fallback existed.)
   # MERGED upstream on 2026-09-30 as b73adaa0, after v0.39.1: carried until a
-  # release contains it, then retire.
+  # release contains it, then retired automatically.
   - branch: fix/tool-search-self-reference
     upstream_pr: headroomlabs-ai/headroom#3172
     active: true

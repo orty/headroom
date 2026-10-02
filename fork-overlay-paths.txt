@@ -9,3 +9,4 @@ scripts/fork-alpha-version.sh
 fork-features.yml
 fork-overlay-paths.txt
 docs/superpowers
+scripts/fork-retire.sh
