@@ -196,9 +196,20 @@ jobs:
               state="$(gh pr view "$num" --repo "$repo" --json state -q .state 2>/dev/null </dev/null)"
             fi
 
-            # 1. Manifest drift, both directions.
-            if [ "$state" = "MERGED" ] && [ "$active" != "false" ]; then
-              warn "manifest: $branch ($pr) is MERGED upstream but still active:true — the rebuild resolves and drops it every run; set active:false to skip the per-run 'gh pr view'"
+            # Merged PR: is its merge commit already in the base this rebuild used?
+            mc=""; in_base=""
+            if [ "$state" = "MERGED" ]; then
+              mc="$(gh pr view "$num" --repo "$repo" --json mergeCommit -q .mergeCommit.oid 2>/dev/null </dev/null)"
+              if [ -n "$mc" ] && git cat-file -e "$mc^{commit}" 2>/dev/null; then
+                git merge-base --is-ancestor "$mc" "$base_ref" 2>/dev/null && in_base=yes || in_base=no
+              fi
+            fi
+
+            # 1. Manifest drift, both directions. A merged PR stays active on
+            #    purpose until the base contains it: the rebuild CARRIES it
+            #    through the merge-to-release window. Retire it only after that.
+            if [ "$state" = "MERGED" ] && [ "$active" != "false" ] && [ "$in_base" = yes ]; then
+              warn "manifest: $branch ($pr) is MERGED and the base ${base_ref} contains it — retire the entry (active: false, keep it as history)"
             fi
             if [ "$state" = "OPEN" ] && [ "$active" = "false" ]; then
               warn "manifest: $branch ($pr) is still OPEN upstream but active:false — this feature is NOT being replayed into main-alpha"
@@ -209,12 +220,13 @@ jobs:
             #    patch-id is in FEATURE_BASE_REF), so main-alpha silently lacks
             #    it until a release catches up. Self-limiting: the ancestry test
             #    starts passing the moment one does.
-            if [ "$state" = "MERGED" ]; then
-              mc="$(gh pr view "$num" --repo "$repo" --json mergeCommit -q .mergeCommit.oid 2>/dev/null </dev/null)"
-              if [ -n "$mc" ] && git cat-file -e "$mc^{commit}" 2>/dev/null; then
-                if ! git merge-base --is-ancestor "$mc" "$base_ref" 2>/dev/null; then
-                  warn "release-pin gap: $pr merged upstream ($(echo "$mc" | cut -c1-8)) but the base ${base_ref} predates it — main-alpha does NOT carry this fix, and re-activating cannot restore it. Returns automatically when a release contains it."
-                fi
+            #    An ACTIVE entry is carried by the rebuild, so that is a notice,
+            #    not a gap. Only an entry already set active:false is a real gap.
+            if [ "$in_base" = no ]; then
+              if [ "$active" != "false" ]; then
+                echo "  $branch: carrying $pr (merged upstream as $(echo "$mc" | cut -c1-8)) until a release base contains it"
+              else
+                warn "release-pin gap: $pr merged upstream ($(echo "$mc" | cut -c1-8)) but the base ${base_ref} predates it, and the entry is active:false — main-alpha does NOT carry this fix. Set it back to active: true to carry it until a release contains it."
               fi
             fi
 
@@ -256,7 +268,8 @@ jobs:
             #    stand-in, that is the PR head (audit_ref, set by 2b), not the
             #    stand-in -- which sits on the release base, so it always looks
             #    "behind" and would ask to rebase a PR that is already current.
-            if [ "$active" != "false" ]; then
+            #    Skipped for a merged PR: there is nothing left to rebase.
+            if [ "$active" != "false" ] && [ "$state" != "MERGED" ]; then
               if git rev-parse -q --verify "$audit_ref" >/dev/null 2>&1; then
                 mb="$(git merge-base "$audit_ref" upstream/main 2>/dev/null)"
                 pr_files="$(git diff --name-only "$mb" "$audit_ref" 2>/dev/null)"

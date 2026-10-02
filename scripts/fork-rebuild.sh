@@ -28,6 +28,12 @@
 # FEATURE_BASE_REF to its current head, applied 3-way. For a feature with an
 # upstream PR the head is refs/pull/N/head, i.e. exactly what reviewers see.
 # Only if that conflicts too does the rebuild fail.
+#
+# A feature whose PR has MERGED drops out only once the base contains the merge
+# commit. Until then (the base is a release tag cut before the merge) the rebuild
+# carries exactly what upstream merged, so main-alpha keeps the fix across the
+# merge-to-release window. Requires `gh` access to the upstream repo; without it
+# the PR state reads as unknown and the feature replays from its branch.
 set -euo pipefail
 
 UPSTREAM_REF="${UPSTREAM_REF:-upstream/main}"
@@ -66,6 +72,38 @@ tr -d '\r' < "$manifest" | awk '
   END { flush() }
 ' > "$tmpdir/active.txt"
 
+# The main-line commit just before PR <num> landed as <mc>. A merge commit's
+# first parent; for a single-parent merge (squash or rebase), walk back while
+# GitHub still attributes the commit to the same PR, so a rebase merge that
+# landed as several commits is carried whole.
+pre_merge_base() {
+  local repo="$1" num="$2" mc="$3" b n=0
+  if [ "$(git rev-list --parents -n1 "$mc" | wc -w)" -gt 2 ]; then
+    git rev-parse "${mc}^1"; return
+  fi
+  b="$(git rev-parse "${mc}^")"
+  while [ "$n" -lt 200 ] && gh api "repos/${repo}/commits/${b}/pulls" -q '.[].number' 2>/dev/null </dev/null | grep -qx "$num"; do
+    b="$(git rev-parse "${b}^")"; n=$((n + 1))
+  done
+  echo "$b"
+}
+
+# Replay exactly what upstream merged for a PR the base does not contain yet.
+carry_feature() {
+  local branch="$1" pr="$2" num="$3" repo="$4" mc="$5" from
+  from="$(pre_merge_base "$repo" "$num" "$mc")"
+  git diff --binary "$from" "$mc" > "$tmpdir/carry.patch"
+  if ! git apply --3way --index "$tmpdir/carry.patch" >/dev/null 2>"$tmpdir/apply.err"; then
+    echo "::error::${branch}: ${pr} merged upstream as $(git rev-parse --short "$mc"), but that change does not apply on $(git rev-parse --short "$UPSTREAM_REF"), which predates it. Conflicting files:" >&2
+    git diff --name-only --diff-filter=U >&2 || true
+    cat "$tmpdir/apply.err" >&2
+    exit 1
+  fi
+  git commit -q -m "$(git log -1 --format=%s "$mc")" \
+    -m "Carried from upstream ${mc} (${pr}, merged): the base $(git rev-parse --short "$UPSTREAM_REF") predates the merge. Drops automatically once a base contains it."
+  echo "::notice::${branch}: carrying ${pr} (merged upstream as $(git rev-parse --short "$mc")) until a release base contains it" >&2
+}
+
 while IFS=$'\t' read -r branch pr; do
   [ -z "$branch" ] && continue
 
@@ -77,12 +115,27 @@ while IFS=$'\t' read -r branch pr; do
   git rev-parse --verify -q "$ref^{commit}" >/dev/null \
     || { echo "::error::feature branch not found: $branch" >&2; exit 1; }
 
-  # Drop the feature once its upstream PR has merged (keyed on the PR NUMBER, not
-  # the branch name) — this is the delta-reduction mechanism.
+  # Drop the feature once its upstream PR has merged AND the base contains the
+  # merge (keyed on the PR NUMBER, not the branch name) -- the delta-reduction
+  # mechanism. Merged but not yet in the base (the base is a release tag cut
+  # before the merge): CARRY exactly what upstream merged instead, so main-alpha
+  # never loses a fix in the window between merge and release.
   if [ "$pr" != "null" ]; then
     num="${pr##*#}"; repo="${pr%#*}"
-    state="$(gh pr view "$num" --repo "$repo" --json state -q .state 2>/dev/null || echo UNKNOWN)"
-    if [ "$state" = "MERGED" ]; then echo "drop $branch (PR $pr MERGED)" >&2; continue; fi
+    state="$(gh pr view "$num" --repo "$repo" --json state -q .state 2>/dev/null </dev/null || echo UNKNOWN)"
+    if [ "$state" = "MERGED" ]; then
+      mc="$(gh pr view "$num" --repo "$repo" --json mergeCommit -q '.mergeCommit.oid' 2>/dev/null </dev/null || true)"
+      if [ -z "$mc" ] || ! git cat-file -e "${mc}^{commit}" 2>/dev/null; then
+        echo "::warning::${branch}: ${pr} is MERGED but its merge commit (${mc:-unknown}) is not available here; dropped without checking whether ${UPSTREAM_REF} contains it" >&2
+        continue
+      fi
+      if git merge-base --is-ancestor "$mc" "$UPSTREAM_REF"; then
+        echo "drop $branch (PR $pr MERGED, base contains $(git rev-parse --short "$mc"))" >&2
+        continue
+      fi
+      carry_feature "$branch" "$pr" "$num" "$repo" "$mc"
+      continue
+    fi
   fi
 
   echo "replay $branch via $ref (linearize on the fly)" >&2
