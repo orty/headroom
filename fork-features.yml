@@ -87,6 +87,7 @@ features:
   # stand-in, until the fallback existed.)
   # MERGED upstream on 2026-09-30 as b73adaa0, after v0.39.1: carried until a
   # release contains it, then retired automatically.
+  # Retired automatically 2026-10-06: headroomlabs-ai/headroom#3172 merged as b73adaa0, released in v0.40.0.
   - branch: fix/tool-search-self-reference
     upstream_pr: headroomlabs-ai/headroom#3172
-    active: true
+    active: false
