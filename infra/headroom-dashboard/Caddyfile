@@ -1,0 +1,28 @@
+{
+    admin off
+}
+
+:8080 {
+    rewrite / /dashboard
+
+    # GET only: FastAPI's @app.get registers no HEAD, so a HEAD would fall
+    # through to Headroom's passthrough relay upstream.
+    @read {
+        method GET
+        path /dashboard /dashboard/ /dashboard/static/* /stats /stats-history /stats-lifetime /health
+    }
+
+    handle @read {
+        reverse_proxy http://headroom {
+            # ACA routes internal calls by Host; the dashboard host would loop back here.
+            header_up Host headroom
+            header_up -Cookie
+            header_up -Authorization
+            header_up x-headroom-proxy-token {env.HEADROOM_PROXY_TOKEN}
+        }
+    }
+
+    handle {
+        respond 404
+    }
+}
