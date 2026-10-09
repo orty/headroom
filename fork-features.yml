@@ -91,3 +91,14 @@ features:
   - branch: fix/tool-search-self-reference
     upstream_pr: headroomlabs-ai/headroom#3172
     active: false
+  # Serve headroom_retrieve when the model calls it alongside a client tool.
+  # Before this, the proxy handed both calls to Claude Code (#839 pass-through),
+  # which answers "No such tool available: headroom_retrieve", so the model never
+  # got the content. All 11 such leaks in Serge's transcripts since 2026-10-01
+  # were this shape (retrieve + ListAgents or Bash, main thread, Opus 5.5).
+  # MERGED upstream 2026-10-09 as 01d91948, after v0.40.0: carried until a
+  # release contains it, then retired automatically. The branch is mirrored from
+  # gglucass's PR head so the rebuild can resolve it.
+  - branch: fix/ccr-serve-retrieve-in-mixed-turn
+    upstream_pr: headroomlabs-ai/headroom#4034
+    active: true
