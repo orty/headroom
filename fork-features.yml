@@ -102,3 +102,15 @@ features:
   - branch: fix/ccr-serve-retrieve-in-mixed-turn
     upstream_pr: headroomlabs-ai/headroom#4034
     active: true
+  # Answer Claude Code's /api/hello reachability probe inside the token gate.
+  # Every claude.exe process sends one unauthenticated HEAD /api/hello that never
+  # carries ANTHROPIC_CUSTOM_HEADERS, so since HEADROOM_PROXY_TOKEN was enforced
+  # (2026-10-08) each one logged a proxy_auth_rejected (424 in 52 h, from WALTER
+  # and dev laptops). The gate now answers GET/HEAD on exactly /api/hello with an
+  # empty 200 itself, never forwarded (not an _AUTH_EXEMPT_PATHS entry, which
+  # would relay it upstream anonymously). Also adds method=/ua=/xff= to
+  # proxy_auth_rejected so the remaining rejected callers can be identified
+  # behind the ACA gateway.
+  - branch: fix/api-hello-probe-behind-token-gate
+    upstream_pr: headroomlabs-ai/headroom#4150
+    active: true
