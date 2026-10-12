@@ -120,3 +120,11 @@ features:
   - branch: fix/api-hello-probe-behind-token-gate
     upstream_pr: headroomlabs-ai/headroom#4150
     active: true
+  # Show the dashboard's Recent Requests table (and project names) to callers that
+  # passed the token gate. /stats withholds them from every non-loopback caller
+  # unless Host is an IP literal AND the peer is in a trusted CIDR, which an
+  # Entra-fronted dashboard (domain Host, token injected by Caddy) can never meet.
+  # Fork-only (upstream_pr: null); also offered upstream as a nice-to-have.
+  - branch: feat/dashboard-requests-for-token-holders
+    upstream_pr: null
+    active: true
