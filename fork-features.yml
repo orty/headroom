@@ -111,6 +111,12 @@ features:
   # would relay it upstream anonymously). Also adds method=/ua=/xff= to
   # proxy_auth_rejected so the remaining rejected callers can be identified
   # behind the ACA gateway.
+  # Upstream #4059 (merged 2026-10-08, after v0.40.0) added the explicit /api/hello
+  # route that #4150's second commit relies on. Carried by number until a release
+  # contains it; there is no fork branch.
+  - branch: carry/headroom-4059-api-hello-route
+    upstream_pr: headroomlabs-ai/headroom#4059
+    active: true
   - branch: fix/api-hello-probe-behind-token-gate
     upstream_pr: headroomlabs-ai/headroom#4150
     active: true

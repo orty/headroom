@@ -34,6 +34,24 @@
 # carries exactly what upstream merged, so main-alpha keeps the fix across the
 # merge-to-release window. Requires `gh` access to the upstream repo; without it
 # the PR state reads as unknown and the feature replays from its branch.
+#
+# STORED CONFLICT RESOLUTIONS (git rerere). Some conflicts are textual only: the
+# base and the PR disagree about lines next to an insertion, and no merge strategy
+# can tell where the line belongs. Resolve such a conflict ONCE and store it as
+# rr-cache/<hash>/{preimage,postimage} on the overlay ref; every rebuild restores
+# these into the work repo and replays with rerere on, so a conflict whose text
+# matches EXACTLY a stored one is resolved the same way, with no human. Entries
+# are keyed on the conflicting text, not on commit ids, so they survive new pushes
+# to the PR that leave that hunk alone; an entry that no longer matches is unused.
+# Applies to commit-by-commit replay and to the carry step's cherry-pick retry
+# (not to the net-change fallback, which uses `git apply`). rr-cache/ stays on the
+# overlay branch and is not copied into main-alpha. To record a resolution:
+#   git worktree add --detach /tmp/rec <failing base>; cd /tmp/rec
+#   git -c rerere.enabled=true cherry-pick <the feature's commits>   # stops
+#   <edit the file to resolve>; git add <file>
+#   git -c rerere.enabled=true cherry-pick --continue --no-edit      # records it
+#   cp -r "$(git rev-parse --path-format=absolute --git-path rr-cache)/<hash>" \
+#         <fork-overlay checkout>/rr-cache/        # preimage + postimage; commit
 set -euo pipefail
 
 UPSTREAM_REF="${UPSTREAM_REF:-upstream/main}"
@@ -57,6 +75,38 @@ git worktree add -q --detach "$work" "$UPSTREAM_REF"
 cleanup() { git worktree remove --force "$work" 2>/dev/null || true; rm -rf "$tmpdir"; }
 trap cleanup EXIT
 cd "$work"
+
+# Stored conflict resolutions: restore rr-cache/ from the overlay ref into this
+# repo's rerere cache (see the header).
+RR=(-c rerere.enabled=true -c rerere.autoupdate=true)
+rr_dir="$(git rev-parse --path-format=absolute --git-path rr-cache)"
+rr_n=0
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+  case "${f##*/}" in preimage|postimage) ;; *) continue ;; esac
+  d="$rr_dir/$(basename "$(dirname "$f")")"
+  mkdir -p "$d"
+  git cat-file blob "$OVERLAY_REF:$f" > "$d/${f##*/}"
+  [ "${f##*/}" = postimage ] && rr_n=$((rr_n + 1))
+done < <(git ls-tree -r --name-only "$OVERLAY_REF" -- rr-cache 2>/dev/null)
+[ "$rr_n" -gt 0 ] && echo "rr-cache: restored $rr_n stored conflict resolution(s)" >&2
+
+# cherry-pick "$@" with rerere on. When every conflict was resolved from the
+# cache (nothing left unmerged; autoupdate has staged it) finish the pick with
+# --continue, repeating for a multi-commit range. Returns non-zero, leaving the
+# state for the caller to abort, if anything is still unresolved.
+pick() {
+  local out rc=0 n=0
+  out="$(git "${RR[@]}" cherry-pick "$@" 2>&1)" || rc=$?
+  while [ "$rc" -ne 0 ] && [ "$n" -lt 100 ]; do
+    [ -z "$(git diff --name-only --diff-filter=U)" ] || return "$rc"
+    [ -e "$(git rev-parse --path-format=absolute --git-path CHERRY_PICK_HEAD)" ] || return "$rc"
+    echo "::notice::applied with a stored conflict resolution (rr-cache)" >&2
+    rc=0; out="$(git "${RR[@]}" cherry-pick --continue --no-edit 2>&1)" || rc=$?
+    n=$((n + 1))
+  done
+  return "$rc"
+}
 
 # 1. Replay active features (linear branches only). A feature replays unless its
 #    upstream PR is MERGED or active:false. Manifest parsed with awk (no python
@@ -92,12 +142,35 @@ pre_merge_base() {
 carry_feature() {
   local branch="$1" pr="$2" num="$3" repo="$4" mc="$5" from
   from="$(pre_merge_base "$repo" "$num" "$mc")"
+  local start; start="$(git rev-parse HEAD)"
   git diff --binary "$from" "$mc" > "$tmpdir/carry.patch"
   if ! git apply --3way --index "$tmpdir/carry.patch" >/dev/null 2>"$tmpdir/apply.err"; then
-    echo "::error::${branch}: ${pr} merged upstream as $(git rev-parse --short "$mc"), but that change does not apply on $(git rev-parse --short "$UPSTREAM_REF"), which predates it. Conflicting files:" >&2
-    git diff --name-only --diff-filter=U >&2 || true
-    cat "$tmpdir/apply.err" >&2
-    exit 1
+    # git apply never consults rerere. Retry as real cherry-picks so a stored
+    # resolution can apply: -m 1 for a merge commit, else the range of commits
+    # GitHub attributes to the PR (one for a squash). Squashed back into one
+    # commit below, so the result looks the same as a clean apply.
+    git diff --name-only --diff-filter=U > "$tmpdir/carry.conflicts" || true
+    git reset -q --hard "$start"
+    local ok=1
+    if [ "$(git rev-list --parents -n1 "$mc" | wc -w)" -gt 2 ]; then
+      pick --allow-empty -m 1 "$mc" || ok=0
+    else
+      pick --allow-empty "${from}..${mc}" || ok=0
+    fi
+    if [ "$ok" = 1 ]; then
+      git reset -q --soft "$start"
+    else
+      git cherry-pick --abort 2>/dev/null || true
+      git reset -q --hard "$start"
+      echo "::error::${branch}: ${pr} merged upstream as $(git rev-parse --short "$mc"), but that change does not apply on $(git rev-parse --short "$UPSTREAM_REF"), which predates it, and no stored resolution covers the conflict. Conflicting files:" >&2
+      cat "$tmpdir/carry.conflicts" >&2
+      cat "$tmpdir/apply.err" >&2
+      exit 1
+    fi
+  fi
+  if git diff --cached --quiet; then
+    echo "::notice::${branch}: ${pr} adds nothing on top of $(git rev-parse --short "$UPSTREAM_REF"); nothing to carry" >&2
+    return 0
   fi
   git commit -q -m "$(git log -1 --format=%s "$mc")" \
     -m "Carried from upstream ${mc} (${pr}, merged): the base $(git rev-parse --short "$UPSTREAM_REF") predates the merge. Drops automatically once a base contains it."
@@ -106,14 +179,6 @@ carry_feature() {
 
 while IFS=$'\t' read -r branch pr; do
   [ -z "$branch" ] && continue
-
-  # Resolve the branch ref, preferring the origin tracking ref — that is the
-  # authoritative PR head. A stale LOCAL branch of the same name (e.g. an old dev
-  # checkout) must never shadow it, or the fork replays outdated feature content.
-  ref="origin/$branch"
-  git rev-parse --verify -q "$ref^{commit}" >/dev/null || ref="$branch"
-  git rev-parse --verify -q "$ref^{commit}" >/dev/null \
-    || { echo "::error::feature branch not found: $branch" >&2; exit 1; }
 
   # Drop the feature once its upstream PR has merged AND the base contains the
   # merge (keyed on the PR NUMBER, not the branch name) -- the delta-reduction
@@ -138,6 +203,16 @@ while IFS=$'\t' read -r branch pr; do
     fi
   fi
 
+  # Resolve the branch ref, preferring the origin tracking ref — that is the
+  # authoritative PR head. A stale LOCAL branch of the same name (e.g. an old dev
+  # checkout) must never shadow it, or the fork replays outdated feature content.
+  # Only needed from here on: a MERGED PR is carried by number above and needs no
+  # fork branch, so an upstream PR the fork did not author can be carried too.
+  ref="origin/$branch"
+  git rev-parse --verify -q "$ref^{commit}" >/dev/null || ref="$branch"
+  git rev-parse --verify -q "$ref^{commit}" >/dev/null \
+    || { echo "::error::feature branch not found: $branch" >&2; exit 1; }
+
   echo "replay $branch via $ref (linearize on the fly)" >&2
   # Genuine feature commits only: --no-merges drops merge commits, and
   # --right-only --cherry-pick drops commits already upstream (by patch-id), so
@@ -148,7 +223,7 @@ while IFS=$'\t' read -r branch pr; do
   start="$(git rev-parse HEAD)"
   failed=""
   for c in $commits; do
-    if ! git cherry-pick --allow-empty "$c" >/dev/null 2>&1; then
+    if ! pick --allow-empty "$c"; then
       failed="$c"
       git cherry-pick --abort 2>/dev/null || true
       break
