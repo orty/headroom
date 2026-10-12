@@ -37,7 +37,8 @@ on:
 permissions:
   contents: read
   # The health step below reads the repo's workflow list to detect upstream
-  # workflows that drifted back to `active` after a mirror.
+  # workflows that drifted back to `active` after a mirror. (Disabling them uses
+  # FORK_RELEASE_PAT, not this GITHUB_TOKEN.)
   actions: read
 
 concurrency:
@@ -335,7 +336,14 @@ jobs:
               esac
               b="${p##*/}"
               case "$keep" in *" $b "*) continue ;; esac
-              warn "workflow drift: '${b}' is active but outside the fork keep-set — an upstream workflow re-enabled itself; disable it (gh workflow disable)"
+              # Self-heal: disabling an upstream workflow the fork never runs is
+              # idempotent and reversible (gh workflow enable). Needs Actions
+              # write on FORK_RELEASE_PAT; without it, say so and leave it to a human.
+              if gh api -X PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/${b}/disable" >/dev/null 2>&1; then
+                warn "workflow drift fixed: '${b}' was active but outside the fork keep-set (an upstream workflow re-enabled itself); the sync disabled it"
+              else
+                warn "workflow drift: '${b}' is active but outside the fork keep-set — an upstream workflow re-enabled itself and the sync could not disable it (FORK_RELEASE_PAT needs Actions: write); run: gh workflow disable ${b}"
+              fi
             done
 
           # 5. The floor invariant: base + replayed features + exactly ONE
