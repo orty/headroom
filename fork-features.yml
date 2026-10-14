@@ -99,9 +99,10 @@ features:
   # MERGED upstream 2026-10-09 as 01d91948, after v0.40.0: carried until a
   # release contains it, then retired automatically. The branch is mirrored from
   # gglucass's PR head so the rebuild can resolve it.
+  # Retired automatically 2026-10-14: headroomlabs-ai/headroom#4034 merged as 01d91948, released in v0.41.0.
   - branch: fix/ccr-serve-retrieve-in-mixed-turn
     upstream_pr: headroomlabs-ai/headroom#4034
-    active: true
+    active: false
   # Answer Claude Code's /api/hello reachability probe inside the token gate.
   # Every claude.exe process sends one unauthenticated HEAD /api/hello that never
   # carries ANTHROPIC_CUSTOM_HEADERS, so since HEADROOM_PROXY_TOKEN was enforced
@@ -114,9 +115,10 @@ features:
   # Upstream #4059 (merged 2026-10-08, after v0.40.0) added the explicit /api/hello
   # route that #4150's second commit relies on. Carried by number until a release
   # contains it; there is no fork branch.
+  # Retired automatically 2026-10-14: headroomlabs-ai/headroom#4059 merged as 931e5b96, released in v0.41.0.
   - branch: carry/headroom-4059-api-hello-route
     upstream_pr: headroomlabs-ai/headroom#4059
-    active: true
+    active: false
   - branch: fix/api-hello-probe-behind-token-gate
     upstream_pr: headroomlabs-ai/headroom#4150
     active: true
