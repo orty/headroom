@@ -133,6 +133,10 @@ jobs:
           # retrying upstream". Pin the pre-0.39 bind here so the setting lives
           # in the repo, not only on the container app. This leaves /v1/*
           # unauthenticated unless HEADROOM_PROXY_TOKEN is also set.
+          # Remember what is live, for the rollback step below.
+          az containerapp show --name "${ACA_NAME}" --resource-group "${ACA_RG}" -o json > /tmp/aca-prev.json
+          echo "PREV_IMAGE=$(jq -r '.properties.template.containers[0].image' /tmp/aca-prev.json)" >> "$GITHUB_ENV"
+          echo "PREV_VERSION=$(jq -r '[.properties.template.containers[0].env[]? | select(.name == "HEADROOM_VERSION") | .value][0] // ""' /tmp/aca-prev.json)" >> "$GITHUB_ENV"
           az containerapp update \
             --name "${ACA_NAME}" \
             --resource-group "${ACA_RG}" \
@@ -141,3 +145,40 @@ jobs:
             --set-env-vars "HEADROOM_VERSION=${TAG}" "HEADROOM_HOST=0.0.0.0"
 
           echo "✓ Deployed ${IMAGE} → revision suffix ${SUFFIX}"
+
+      # Smoke check, then roll back on failure. In single-revision mode ACA only
+      # moves traffic once the new revision passes its TCP probes, so a revision
+      # that never binds is already contained -- but one that binds and is
+      # broken (not ready, wrong build, token gate missing) takes all traffic.
+      # Require /readyz ready on the deployed version, and an unauthenticated
+      # /v1/messages to be refused (401) so the proxy never ships open.
+      - name: Smoke check
+        id: smoke
+        if: steps.image.outputs.skip != 'true'
+        run: |
+          FQDN="$(az containerapp show --name "${ACA_NAME}" --resource-group "${ACA_RG}"             --query properties.configuration.ingress.fqdn -o tsv)"
+          TAG="${{ steps.image.outputs.tag }}"
+          # ponytail: 5 min budget; ACA's startup probe allows up to 240 s.
+          for i in $(seq 1 30); do
+            body="$(curl -s -m 10 "https://${FQDN}/readyz" || true)"
+            if printf '%s' "$body" | jq -e --arg v "$TAG" '.ready == true and .version == $v' >/dev/null 2>&1; then
+              code="$(curl -s -o /dev/null -w '%{http_code}' -m 15 -X POST "https://${FQDN}/v1/messages"                 -H 'content-type: application/json' -d '{}')"
+              if [ "$code" = "401" ]; then
+                echo "smoke ok: ${TAG} ready, unauthenticated /v1/messages -> 401"
+                exit 0
+              fi
+              echo "::error::${TAG} is ready but unauthenticated /v1/messages returned ${code}, not 401"
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "::error::/readyz never reported ready on ${TAG}; last body: ${body:0:300}"
+          exit 1
+
+      # Re-deploys the image and version that were live before this run, as a
+      # new revision. Leaves the run failed so the bad release stays visible.
+      - name: Roll back
+        if: failure() && steps.smoke.outcome == 'failure' && env.PREV_IMAGE != ''
+        run: |
+          az containerapp update             --name "${ACA_NAME}"             --resource-group "${ACA_RG}"             --image "${PREV_IMAGE}"             --revision-suffix "rb$(date +%s | tail -c 9)"             --set-env-vars "HEADROOM_VERSION=${PREV_VERSION}" "HEADROOM_HOST=0.0.0.0"
+          echo "::error::rolled back to ${PREV_IMAGE} (${PREV_VERSION}) after a failed smoke check"
