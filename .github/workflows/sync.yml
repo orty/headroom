@@ -1,26 +1,16 @@
 name: Sync (rebuild main-alpha)
 
-# Every 30 min:
-#   1. Mirror fork `main` := upstream/main HEAD — always, on every upstream
-#      commit (cheap; triggers no fork workflow).
-#   2. Rebuild main-alpha on the LATEST UPSTREAM RELEASE TAG (not upstream/main)
-#      + replayed active features + the fork overlay. Because the base is pinned
-#      to the release tag, the rebuilt tree only changes when upstream cuts a new
-#      release (or the fork overlay/features change) — so the idempotency guard
-#      reports NO_CHANGE between releases and main-alpha is NOT force-pushed,
-#      which means alpha-release.yml does NOT fire on every upstream main commit.
-#      One alpha per upstream release (the requested cadence), instead of one per
-#      upstream push.
+# Every 30 min: rebuild main-alpha on the LATEST UPSTREAM RELEASE TAG (not
+# upstream/main) + replayed active features + the fork overlay. Because the
+# base is pinned to the release tag, the rebuilt tree only changes when
+# upstream cuts a new release (or the fork overlay/features change) -- so the
+# idempotency guard reports NO_CHANGE between releases and main-alpha is NOT
+# force-pushed, which means alpha-release.yml does NOT fire on every upstream
+# main commit. One alpha per upstream release (the requested cadence).
 #
-#      TEMPORARY ESCAPE (self-reverting, see PIN_ESCAPE_COMMIT below): the pin
-#      assumes "merged upstream" implies "in the base". That is false while
-#      upstream goes a long stretch without releasing, and the fork then has no
-#      way to reach a merged fix at all -- the feature-replay path cannot
-#      backport a MERGED PR (rev-list --right-only --cherry-pick yields nothing
-#      once its commits are in FEATURE_BASE_REF). That stranded us on upstream
-#      #2952 behind 67 unreleased commits. While the latest release still lacks
-#      the escape commit the base falls back to upstream/main; the step reverts
-#      itself to the release pin as soon as a release contains it.
+# The fork's `main` is no longer mirrored from upstream/main: nothing reads
+# it, and the deploy-key push fired upstream's docker.yml (full multi-arch
+# image matrix) on every mirrored upstream commit.
 #
 # Runs from the default branch (main-alpha), where this file lives, so the
 # schedule fires. Uses SYNC_DEPLOY_KEY (NOT GITHUB_TOKEN) so the force-push to
@@ -70,15 +60,6 @@ jobs:
           # feature/PR head branch the manifest may reference.
           git fetch origin '+refs/heads/*:refs/remotes/origin/*'
 
-      - name: Mirror origin/main := upstream/main
-        run: |
-          if [ "$(git rev-parse upstream/main)" != "$(git rev-parse origin/main)" ]; then
-            git push origin upstream/main:refs/heads/main --force
-            echo "mirrored main -> $(git rev-parse --short upstream/main)"
-          else
-            echo "main already current"
-          fi
-
       - name: Rebuild main-alpha
         env:
           GH_TOKEN: ${{ secrets.FORK_RELEASE_PAT }}
@@ -99,32 +80,15 @@ jobs:
             exit 1
           fi
 
-          # Self-reverting escape from the release pin. Keyed on CONTAINMENT of a
-          # specific upstream commit, not on a tag name or a date: the pin is only
-          # safe once a release actually carries the fix the fork is stranded on.
-          # PIN_ESCAPE_COMMIT = f1c34d33 (upstream #2953, "don't buffer a CCR
-          # stream when passthrough discards the stream flip"), which fixes the
-          # HTTP-200-with-no-body death of any Claude Code session running
-          # extended thinking. Merged 2026-08-13, unreleased as of v0.35.0. When
-          # upstream ships a release containing it this test flips on its own and
-          # the base returns to the release tag -- no follow-up commit and no
-          # scheduled reminder. Delete this block then; it is a no-op once true.
-          PIN_ESCAPE_COMMIT=f1c34d336cf35db341153c1c65e8c15219398340
-          if git merge-base --is-ancestor "$PIN_ESCAPE_COMMIT" "$base_tag" 2>/dev/null; then
-            base_ref="$base_tag"
-            echo "Rebuilding main-alpha on upstream release ${base_tag} (release pin active)"
-          else
-            base_ref=upstream/main
-            echo "::warning::${base_tag} predates upstream #2953 (${PIN_ESCAPE_COMMIT}); basing main-alpha on upstream/main $(git rev-parse --short upstream/main) until a release contains it"
-          fi
+          base_ref="$base_tag"
+          echo "Rebuilding main-alpha on upstream release ${base_tag}"
 
           # Hand the resolved base to the health step so it audits the SAME base
           # this rebuild used, rather than recomputing and drifting from it.
           echo "BASE_TAG=$base_tag" >> "$GITHUB_ENV"
           echo "BASE_REF=$base_ref" >> "$GITHUB_ENV"
 
-          # UPSTREAM_REF = the base (release tag, or upstream/main while the
-          # escape above is engaged); FEATURE_BASE_REF = upstream/main so
+          # UPSTREAM_REF = the release tag; FEATURE_BASE_REF = upstream/main so the
           # feature replay still excludes ALL upstream-main commits
           # (post-release commits never leak onto the tag).
           # COMPARE_REF = the live branch, so an unchanged rebuild is reported as

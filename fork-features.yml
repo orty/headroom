@@ -126,7 +126,8 @@ features:
   # passed the token gate. /stats withholds them from every non-loopback caller
   # unless Host is an IP literal AND the peer is in a trusted CIDR, which an
   # Entra-fronted dashboard (domain Host, token injected by Caddy) can never meet.
-  # Fork-only (upstream_pr: null); also offered upstream as a nice-to-have.
+  # Offered upstream as headroomlabs-ai/headroom#4168; tracked so sync gates rebase
+  # advice on its approval and retires the entry once a release contains it.
   - branch: feat/dashboard-requests-for-token-holders
-    upstream_pr: null
+    upstream_pr: headroomlabs-ai/headroom#4168
     active: true
