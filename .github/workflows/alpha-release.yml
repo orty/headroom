@@ -1,0 +1,84 @@
+name: Alpha Release
+
+# Cuts a fork pre-release on every push to main-alpha. Under the rebase-overlay
+# model main-alpha always carries the fork overlay, so the no-op case is handled
+# upstream of here: sync.yml only force-pushes main-alpha when the rebuilt tree
+# actually changed (its idempotency guard), so a push to main-alpha means a real
+# change. The only skip kept here is "HEAD already tagged" (re-run safety).
+#
+# Version scheme: vX.Y.(Z+1)-alpha.N, where vX.Y.Z is the latest STABLE upstream
+# (headroomlabs-ai/headroom) release. N increments per release and resets to 1
+# when upstream ships a new version (the stable base moves up). Examples:
+#   upstream v0.26.0 + fork patches -> v0.26.1-alpha.1, v0.26.1-alpha.2, ...
+#   upstream then ships v0.27.0     -> v0.27.1-alpha.1, ...
+# Computation lives in scripts/fork-alpha-version.sh (unit-tested).
+#
+# The release is created with FORK_RELEASE_PAT (NOT GITHUB_TOKEN) so the
+# `release: published` event fires docker.yml. Releases created with
+# GITHUB_TOKEN are suppressed by GitHub and would never build a Docker image.
+# The PAT is a fine-grained token scoped to this repo with Contents: Read and
+# write (shared with mirror-upstream-release.yml).
+
+on:
+  push:
+    branches: [main-alpha]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Serialize so two quick pushes don't compute the same alpha.N and collide.
+  group: alpha-release
+  cancel-in-progress: false
+
+jobs:
+  alpha:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main-alpha
+          fetch-depth: 0
+          token: ${{ secrets.FORK_RELEASE_PAT }}
+
+      - name: Cut alpha pre-release
+        env:
+          GH_TOKEN: ${{ secrets.FORK_RELEASE_PAT }}
+        run: |
+          set -euo pipefail
+
+          # Skip if HEAD is already released (workflow re-run / no-op push).
+          if git tag --points-at HEAD | grep -qE '^v[0-9]'; then
+            echo "HEAD already has a release tag — skipping."
+            exit 0
+          fi
+
+          # base = upstream's latest STABLE release version, queried DIRECTLY
+          # from upstream. Race-free vs the fork's mirrored tags, which
+          # mirror-upstream-release.yml may be pushing in parallel on this same
+          # push; pyproject can also drift from upstream via the feature replay.
+          UPSTREAM="headroomlabs-ai/headroom"
+          base="$(gh release list --repo "$UPSTREAM" --limit 30 \
+            --json tagName,isPrerelease,isDraft \
+            -q '.[] | select(.isPrerelease == false and .isDraft == false) | .tagName' \
+            | sort -V | tail -1)"
+          base="${base#v}"
+
+          git tag -l 'v*-alpha.*' > /tmp/alpha-tags.txt
+          newtag="$(bash scripts/fork-alpha-version.sh "$base" /tmp/alpha-tags.txt)"
+
+          echo "Cutting ${newtag} (stable base v${base}) at ${GITHUB_SHA}"
+
+          # Single-line printf: a multi-line literal in a YAML `run` block would
+          # carry the block indentation into the release-notes body.
+          target="${newtag%-alpha.*}"; target="${target#v}"
+          notes="$(printf '## %s (fork pre-release)\n\nUpstream **v%s** + fork customizations on top.\n\n_Sorts after v%s and before any future v%s; superseded once upstream ships v%s._' \
+            "$newtag" "$base" "$base" "$target" "$target")"
+
+          gh release create "$newtag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Release ${newtag}" \
+            --notes "$notes" \
+            --prerelease
