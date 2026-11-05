@@ -119,9 +119,10 @@ features:
   - branch: carry/headroom-4059-api-hello-route
     upstream_pr: headroomlabs-ai/headroom#4059
     active: false
+  # Retired automatically 2026-11-05: headroomlabs-ai/headroom#4150 merged as 673831a4, released in v0.43.1.
   - branch: fix/api-hello-probe-behind-token-gate
     upstream_pr: headroomlabs-ai/headroom#4150
-    active: true
+    active: false
   # Show the dashboard's Recent Requests table (and project names) to callers that
   # passed the token gate. /stats withholds them from every non-loopback caller
   # unless Host is an IP literal AND the peer is in a trusted CIDR, which an
