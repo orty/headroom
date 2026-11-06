@@ -72,7 +72,8 @@ $(tr -d '\r' < Caddyfile | sed 's/^/          /')
           - volumeName: caddy-config
             mountPath: /etc/caddy
     scale:
-      minReplicas: 0
+      # Always on: with min 0 the cold start made Easy Auth 302 the background polls ("Error" in the page).
+      minReplicas: 1
       maxReplicas: 1
     volumes:
       - name: caddy-config

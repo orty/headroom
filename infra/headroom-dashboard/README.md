@@ -109,7 +109,7 @@ Easy Auth (`az containerapp auth`):
 | Image | `docker.io/library/caddy:2-alpine` |
 | Command | `caddy run --config /etc/caddy/Caddyfile --adapter caddyfile` |
 | Ingress | external, target port 8080, `allowInsecure: false` |
-| Scale | 0 to 1 replicas, 0.25 vCPU / 0.5 Gi. The first open after idle takes about 5 to 10 s. |
+| Scale | 1 replica (always on), 0.25 vCPU / 0.5 Gi. Scale-to-zero made Easy Auth answer the page's background polls with a 302, so the page showed "Error". |
 | Secrets | `headroom-proxy-token`: a copy of the value on the `headroom` app. `caddyfile`: the Caddyfile. `deploy.sh` writes both through az's `@file` expansion, never on a command line, and removes the old `microsoft-provider-authentication-secret`. |
 | Env | `HEADROOM_PROXY_TOKEN=secretref:headroom-proxy-token` |
 | Volume | Secret volume mounting only `caddyfile`, at `/etc/caddy/Caddyfile` |
