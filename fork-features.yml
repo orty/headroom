@@ -129,6 +129,7 @@ features:
   # Entra-fronted dashboard (domain Host, token injected by Caddy) can never meet.
   # Offered upstream as headroomlabs-ai/headroom#4168; tracked so sync gates rebase
   # advice on its approval and retires the entry once a release contains it.
+  # Retired automatically 2026-11-10: headroomlabs-ai/headroom#4168 merged as 9b2dec56, released in v0.44.0.
   - branch: feat/dashboard-requests-for-token-holders
     upstream_pr: headroomlabs-ai/headroom#4168
-    active: true
+    active: false
