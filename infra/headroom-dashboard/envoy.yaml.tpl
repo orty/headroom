@@ -30,6 +30,8 @@ static_resources:
           server_header_transformation: PASS_THROUGH
           # SSE streams can sit silent for minutes while the model thinks.
           stream_idle_timeout: 900s
+          # Match virtual hosts on the name alone, whatever port a client sends.
+          strip_any_host_port: true
           request_timeout: 0s
           access_log:
           - name: envoy.access_loggers.stdout
@@ -156,8 +158,11 @@ static_resources:
             # Never let a caller-supplied value through, and never echo the token.
             request_headers_to_remove: [x-headroom-gateway-token]
             virtual_hosts:
-            - name: all
-              domains: ["*"]
+            # The dashboard is served on its own hostname(s) only (and the app's
+            # ACA FQDN, for tests). Any other name, e.g. headroom.powell-software.com
+            # once it points here, gets the API routes only.
+            - name: dashboard
+              domains: [__DASHBOARD_DOMAINS__]
               routes:
               # Browser routes: GET only. FastAPI registers no HEAD for its
               # GET routes, so a HEAD would reach Headroom's passthrough relay.
@@ -187,7 +192,20 @@ static_resources:
                 request_headers_to_remove: [cookie]
                 request_headers_to_add: *proxy_token
               - match: { prefix: / }
-                direct_response: { status: 404, body: { inline_string: "not found\n" } }
+                direct_response: &not_found { status: 404, body: { inline_string: "not found\n" } }
+            - name: api-only
+              domains: ["*"]
+              routes:
+              - match: { prefix: /v1/ }
+                route: *api
+                request_headers_to_remove: [cookie]
+                request_headers_to_add: *proxy_token
+              - match: { prefix: /api/ }
+                route: *api
+                request_headers_to_remove: [cookie]
+                request_headers_to_add: *proxy_token
+              - match: { prefix: / }
+                direct_response: *not_found
 
   clusters:
   - name: headroom

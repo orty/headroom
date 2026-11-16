@@ -40,6 +40,9 @@ if [ -z "${APP_ID:-}" ]; then
   echo "APP_ID was empty: found/created $APP_ID. Pin it in .env.local (APP_ID=...)." >&2
 fi
 export TENANT APP_ID
+# The dashboard answers on HOST and the app's own FQDN only; other names (e.g.
+# headroom.powell-software.com after it moves here) get the API routes only.
+export DASHBOARD_HOSTS="$HOST,$FQDN"
 # The gateway's token audience: the registration's App ID URI (entra-gateway-api.sh).
 APP_ID_URI=${APP_ID_URI:-$(azv ad app show --id "$APP_ID" --query "identifierUris[0]" -o tsv)}
 APP_ID_URI=${APP_ID_URI:-api://$APP_ID}

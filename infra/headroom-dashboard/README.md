@@ -67,6 +67,9 @@ Services (managed identity) ────────┘       ├─ Easy Auth s
 - **Token handling.** The proxy token is read from the env at request time
   (`%ENVIRONMENT(HEADROOM_PROXY_TOKEN)%`), never rendered into the config. No admin listener. The
   access log (JSON on stdout) has method, path, status, timings and the caller tags, never a token.
+- **Dashboard on its own hostnames only.** Browser routes answer on `$HOST` and the app's ACA FQDN
+  only. Any other name pointed at the app (e.g. `$PROXY_HOST` once it moves here) gets the API
+  routes only, and 404 elsewhere.
 - **GET only on browser routes, HEAD excluded**: FastAPI registers no HEAD for its GET routes, so a
   HEAD would reach Headroom's passthrough relay.
 - **Upstream `Host` is `headroom`**: ACA routes internal calls by Host.

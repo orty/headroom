@@ -151,7 +151,7 @@ def main() -> int:
 
     env = dict(os.environ, TENANT=TENANT, APP_ID=APP_ID, UPSTREAM_HOST="127.0.0.1",
                UPSTREAM_PORT=str(up_port), JWKS_HOST="localhost", JWKS_PORT=str(jwks_port),
-               CA_FILE=str(tmp / "cert.pem"))
+               CA_FILE=str(tmp / "cert.pem"), DASHBOARD_HOSTS="127.0.0.1,dashboard.example.test")
     rendered = subprocess.run(["bash", str(HERE / "render-envoy.sh")], env=env, check=True,
                               capture_output=True, text=True).stdout
     rendered = rendered.replace("port_value: 8080", f"port_value: {gw_port}")
@@ -263,6 +263,17 @@ def main() -> int:
         s, b = call("GET", "/stats", {"x-headroom-gateway-token": user})
         check("token on a browser route is not forwarded",
               s == 200 and "x-headroom-gateway-token" not in b["headers"], b)
+
+        # Dashboard only on its own hostnames; any other name gets the API only.
+        s, b = call("GET", "/dashboard", {"host": "dashboard.example.test"})
+        check("GET /dashboard on a dashboard hostname -> 200", s == 200, s)
+        for p in ("/", "/dashboard", "/stats", "/health"):
+            s, _ = call("GET", p, {"host": "headroom.example.test"})
+            check(f"GET {p} on another hostname -> 404", s == 404, s)
+        s, b = call("POST", "/v1/messages", {**anth, "host": "headroom.example.test", "x-headroom-gateway-token": user}, b"{}")
+        check("API on another hostname -> 200, same rules", s == 200 and b["headers"].get("x-headroom-proxy-token") == PROXY_TOKEN, s)
+        s, _ = call("POST", "/v1/messages", {**anth, "host": "headroom.example.test"}, b"{}")
+        check("API on another hostname without token -> 401", s == 401, s)
 
         # Streaming: first event must arrive long before the stream ends.
         c = http.client.HTTPConnection("127.0.0.1", gw_port, timeout=30)
