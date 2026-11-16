@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -62,7 +63,19 @@ def load_env() -> dict[str, str]:
 
 
 def az(*args: str) -> str:
-    return subprocess.run(["az", *args], check=True, capture_output=True, text=True).stdout.replace("\r", "")
+    # On Windows `az` is az.cmd, which subprocess only finds by full path, and
+    # cmd.exe then rewrites some characters: keep quotes out of every argument
+    # (Graph URLs use object ids, never `(appId='...')`).
+    exe = shutil.which("az") or "az"
+    return subprocess.run([exe, *args], check=True, capture_output=True, text=True).stdout.replace("\r", "")
+
+
+def object_id(kind: str, app_id: str) -> str:
+    """Object id of the registration (kind "app") or its service principal ("sp")."""
+    oid = az("ad", kind, "show", "--id", app_id, "--query", "id", "-o", "tsv").strip()
+    if not re.fullmatch(r"[0-9a-f-]{36}", oid):
+        raise SystemExit(f"could not resolve the {kind} object id of {app_id}: {oid!r}")
+    return oid
 
 
 def plan(app: dict, env: dict[str, str]) -> tuple[dict, list[str]]:
@@ -160,7 +173,7 @@ def sp_rename(app_id: str, env: dict[str, str], apply: bool) -> None:
     if not new_name:
         return
     sp = json.loads(az("rest", "--method", "get", "--url",
-                       f"https://graph.microsoft.com/v1.0/servicePrincipals(appId='{app_id}')?$select=id,displayName"))
+                       f"https://graph.microsoft.com/v1.0/servicePrincipals/{object_id('sp', app_id)}?$select=id,displayName"))
     if sp.get("displayName") == new_name:
         print(f"service principal {sp['id']}: already named {new_name}")
         return
@@ -188,7 +201,7 @@ def main() -> int:
                 print(f"{k} is empty in .env.local", file=sys.stderr)
                 return 1
         app = json.loads(az("rest", "--method", "get", "--url",
-                            f"https://graph.microsoft.com/v1.0/applications(appId='{env['APP_ID']}')?$select={SELECT}"))
+                            f"https://graph.microsoft.com/v1.0/applications/{object_id('app', env['APP_ID'])}?$select={SELECT}"))
     consent = False
     # Round 2 only adds what Graph refuses in the same PATCH as a new scope.
     for round_no in (1, 2):
