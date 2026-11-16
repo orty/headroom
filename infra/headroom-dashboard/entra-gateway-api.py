@@ -9,9 +9,13 @@ gateway needs and never removes or edits anything that is already there:
 - delegated scope GATEWAY_SCOPE (default access_as_user) for people;
 - app role GATEWAY_APP_ROLE (default Headroom.Proxy, Application members) for
   managed identities (W.A.L.T.E.R., later);
-- public-client redirect URIs for MSAL on laptops (Windows broker + loopback);
+- ONLY with GATEWAY_SHARED_PUBLIC_CLIENT=1: public-client redirect URIs for
+  MSAL on laptops (Windows broker + loopback) and a requiredResourceAccess entry
+  for its own scope. Off by default: a public-client redirect would let any local
+  program obtain, without the app's secret, the signed-in user's tokens for
+  every scope this shared registration is consented for (Azure DevOps included).
+  The laptop shim should get its own public-client registration instead;
 - the Easy Auth callback of GATEWAY_HOST, if set;
-- a requiredResourceAccess entry for its own scope, so one admin consent covers it;
 - Azure CLI (04b07795-...) pre-authorized for that scope, so `az account
   get-access-token --scope <App ID URI>/access_as_user` works without a consent
   prompt (tests, scripts). GATEWAY_PREAUTHORIZE_AZ_CLI=0 skips it. Graph refuses a
@@ -134,10 +138,11 @@ def plan(app: dict, env: dict[str, str]) -> tuple[dict, list[str]]:
         changes.append(f"appRoles: add {role_value} (existing kept: "
                        f"{', '.join(r['value'] for r in roles[:-1]) or 'none'})")
 
+    shared_pc = env.get("GATEWAY_SHARED_PUBLIC_CLIENT") == "1"
     pc = list((app.get("publicClient") or {}).get("redirectUris") or [])
     want_pc = [f"ms-appx-web://microsoft.aad.brokerplugin/{app_id}", "http://localhost"]
     add_pc = [u for u in want_pc if u not in pc]
-    if add_pc:
+    if shared_pc and add_pc:
         patch["publicClient"] = {"redirectUris": pc + add_pc}
         changes.append(f"publicClient.redirectUris: add {', '.join(add_pc)}")
 
@@ -154,7 +159,7 @@ def plan(app: dict, env: dict[str, str]) -> tuple[dict, list[str]]:
     if own is None:
         own = {"resourceAppId": app_id, "resourceAccess": []}
         rra.append(own)
-    if not any(a.get("id") == scope["id"] for a in own["resourceAccess"]):
+    if shared_pc and not any(a.get("id") == scope["id"] for a in own["resourceAccess"]):
         own["resourceAccess"] = list(own["resourceAccess"]) + [{"id": scope["id"], "type": "Scope"}]
         patch["requiredResourceAccess"] = rra
         changes.append(f"requiredResourceAccess: add own scope {scope_value} (admin consent needed)")

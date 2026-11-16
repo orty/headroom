@@ -182,10 +182,10 @@ unset want_token have_token
 # properties.template replaces the template only; secrets and ingress stay.
 have_image=$(azv containerapp show -n "$APP" -g "$RG" --query "properties.template.containers[0].image" -o tsv)
 if [ "$have_image" != "$ENVOY_IMAGE" ]; then
-  # Rollback: az rest --method patch --body @rollback-template.local.json --url <same url>
-  [ -f rollback-template.local.json ] ||
+  # Rollback: az rest --method patch --body @rollback-template.$APP.local.json --url <same url>
+  [ -f "rollback-template.$APP.local.json" ] ||
     azv containerapp show -n "$APP" -g "$RG" --query "{properties: {template: properties.template}}" -o json \
-      > rollback-template.local.json
+      > "rollback-template.$APP.local.json"
   tplfile=$(mktemp)
   printf '{"properties": {"template": %s}}' "$(template_json)" > "$tplfile"
   az rest --method patch --body "@$tplfile" -o none \
@@ -198,5 +198,5 @@ if [ "$changed" = 1 ]; then
     --revision "$(azv containerapp show -n "$APP" -g "$RG" --query properties.latestRevisionName -o tsv)" -o none
   echo "synced token/Envoy config and restarted"
 fi
-# The Caddy-era `caddyfile` secret is left in place: with rollback-template.local.json
+# The Caddy-era `caddyfile` secret is left in place: with rollback-template.$APP.local.json
 # it is the rollback. Remove it by hand once the gateway has run for a while.

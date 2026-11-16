@@ -82,12 +82,12 @@ Dry run by default; `--apply` sends one Graph PATCH. Additive only:
   audience).
 - Delegated scope `access_as_user` (admin consent type).
 - App role `Headroom.Proxy` (Application members) for managed identities.
-- Public-client redirect URIs `ms-appx-web://microsoft.aad.brokerplugin/$APP_ID` and
-  `http://localhost`, for MSAL on laptops. `isFallbackPublicClient` stays off: no device code or
-  password flows.
+- Public-client redirect URIs and its own scope in `requiredResourceAccess`: only with
+  `GATEWAY_SHARED_PUBLIC_CLIENT=1`, off by default. On this shared registration (consented for
+  Azure DevOps and Graph), a public-client redirect would let any local program obtain the
+  signed-in user's tokens for all those scopes without the app's secret. The laptop shim gets its
+  own public-client registration instead (W.A.L.T.E.R. review, 2026-11-16).
 - `https://$GATEWAY_HOST/.auth/login/aad/callback` as a web redirect URI.
-- Its own scope in `requiredResourceAccess`, then one admin consent (the tenant allows no user
-  consent).
 - Display name, only if `NEW_DISPLAY_NAME` is set, on the registration and on its service principal
   (Enterprise application), which Entra does not rename along with it. `deploy.sh` no longer depends on the name once
   `APP_ID` is pinned in `.env.local`.
@@ -149,6 +149,6 @@ certificate once the CNAME resolves.
 - **Proxy token.** Re-run `deploy.sh` whenever the `headroom` app's `headroom-proxy-token` changes.
 - **Entra keys.** Envoy caches Entra's JWKS for an hour and refetches on an unknown `kid`.
 - **Rollback.** Before switching an existing app to Envoy, `deploy.sh` saves its Caddy template to
-  `rollback-template.local.json` (git-ignored) and leaves the `caddyfile` secret in place. To roll
-  back: `az rest --method patch --body @rollback-template.local.json --url <app id>?api-version=2024-03-01`,
+  `rollback-template.<app>.local.json` (git-ignored) and leaves the `caddyfile` secret in place. To roll
+  back: `az rest --method patch --body @rollback-template.<app>.local.json --url <app id>?api-version=2024-03-01`,
   then put Easy Auth's `excludedPaths` back to none. The Entra additions are harmless left in place.
