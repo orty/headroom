@@ -31,7 +31,10 @@ expect GET  "https://$HOST/"                     "302" "login.microsoftonline.co
 for p in /dashboard /stats /health /v1/models /settings/schema; do
   expect GET "https://$HOST$p" "302 401"
 done
-expect POST "https://$HOST/v1/messages"          "302 401"
+expect POST "https://$HOST/v1/messages"          "401"
+# API routes are Envoy's: no or bad Entra token -> 401, preconnect open.
+expect GET  "https://$HOST/v1/models"            "401"
+expect HEAD "https://$HOST/api/hello"            "200"
 # Plain HTTP is redirected to HTTPS, never served.
 expect GET  "http://$HOST/"                      "301 307 308" "https://"
 # The headroom app is unchanged.
