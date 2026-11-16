@@ -17,11 +17,13 @@ gateway needs and never removes or edits anything that is already there:
   prompt (tests, scripts). GATEWAY_PREAUTHORIZE_AZ_CLI=0 skips it. Graph refuses a
   pre-authorization for a scope created in the same PATCH, so --apply runs a
   second round for it;
-- the display name, only if NEW_DISPLAY_NAME is set.
+- the display name, only if NEW_DISPLAY_NAME is set: on the registration AND on
+  its service principal (the Enterprise application), which Entra does not
+  rename along with the registration.
 
 It never touches: secrets/certificates, token version, isFallbackPublicClient,
-existing scopes/roles/URIs, optional claims, owners, or the service principal
-(assignment required, app role assignments).
+existing scopes/roles/URIs, optional claims, owners, or any other service
+principal setting (assignment required, app role assignments).
 
 Default is a dry run that prints the Graph PATCH body. --apply sends it.
 --from-file app.json runs the merge on a saved `GET /applications/{id}` (tests).
@@ -152,6 +154,29 @@ def plan(app: dict, env: dict[str, str]) -> tuple[dict, list[str]]:
     return patch, changes
 
 
+def sp_rename(app_id: str, env: dict[str, str], apply: bool) -> None:
+    """Give the service principal (Enterprise application) the new display name too."""
+    new_name = env.get("NEW_DISPLAY_NAME")
+    if not new_name:
+        return
+    sp = json.loads(az("rest", "--method", "get", "--url",
+                       f"https://graph.microsoft.com/v1.0/servicePrincipals(appId='{app_id}')?$select=id,displayName"))
+    if sp.get("displayName") == new_name:
+        print(f"service principal {sp['id']}: already named {new_name}")
+        return
+    print(f"service principal {sp['id']}: displayName {sp.get('displayName')} -> {new_name}")
+    if not apply:
+        return
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump({"displayName": new_name}, f)
+    try:
+        az("rest", "--method", "patch", "--url", f"https://graph.microsoft.com/v1.0/servicePrincipals/{sp['id']}",
+           "--headers", "Content-Type=application/json", "--body", f"@{f.name}")
+    finally:
+        os.unlink(f.name)
+    print("applied (service principal)")
+
+
 def main() -> int:
     args = sys.argv[1:]
     env = load_env()
@@ -178,6 +203,8 @@ def main() -> int:
         if "--apply" not in args:
             if any(c.startswith("api.oauth2PermissionScopes") for c in changes):
                 print("(round 2 after --apply: pre-authorize Azure CLI for the new scope)")
+            if "--from-file" not in args:
+                sp_rename(app["appId"], env, apply=False)
             print("dry run: re-run with --apply to send it")
             return 0
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
@@ -193,6 +220,8 @@ def main() -> int:
             break
         app = json.loads(az("rest", "--method", "get", "--url",
                             f"https://graph.microsoft.com/v1.0/applications/{app['id']}?$select={SELECT}"))
+    if "--from-file" not in args:
+        sp_rename(app["appId"], env, apply="--apply" in args)
     if consent:
         print("admin consent needed (Fabien): https://login.microsoftonline.com/"
               f"{env.get('TENANT', '<tenant>')}/adminconsent?client_id={app['appId']}")

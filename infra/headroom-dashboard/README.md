@@ -85,10 +85,12 @@ Dry run by default; `--apply` sends one Graph PATCH. Additive only:
 - `https://$GATEWAY_HOST/.auth/login/aad/callback` as a web redirect URI.
 - Its own scope in `requiredResourceAccess`, then one admin consent (the tenant allows no user
   consent).
-- Display name, only if `NEW_DISPLAY_NAME` is set. `deploy.sh` no longer depends on the name once
+- Display name, only if `NEW_DISPLAY_NAME` is set, on the registration and on its service principal
+  (Enterprise application), which Entra does not rename along with it. `deploy.sh` no longer depends on the name once
   `APP_ID` is pinned in `.env.local`.
 
-Never touched: secrets, token version, existing scopes/roles/URIs, the service principal. If
+Never touched: secrets, token version, existing scopes/roles/URIs, any service principal setting
+other than its display name. If
 W.A.L.T.E.R. sets "Assignment required" on the service principal, every Headroom user must be
 assigned too, or Entra refuses their token.
 
