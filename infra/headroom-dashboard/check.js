@@ -10,11 +10,12 @@
     ['GET', '/stats-lifetime', 200],
     ['GET', '/health', 200],
     ['HEAD', '/dashboard', 404],
-    // The auth layer in front of Caddy answers 403 to signed-in POSTs (no
-    // `Server: Caddy`), so they never reach Caddy or Headroom; 404 would be Caddy's.
+    // Easy Auth answers 403 to signed-in fetch() POSTs on its own routes; 404 is Envoy's.
     ['POST', '/stats', [403, 404]],
-    ['POST', '/v1/messages', [403, 404]],
-    ['GET', '/v1/models', 404],
+    // API routes skip Easy Auth: a browser session is not an Entra access token,
+    // so Envoy answers 401 (the session cookie never counts there).
+    ['POST', '/v1/messages', 401],
+    ['GET', '/v1/models', 401],
     ['GET', '/settings/schema', 404],
     ['GET', '/transformations/feed', 404],
   ];
