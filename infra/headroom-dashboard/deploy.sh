@@ -20,7 +20,7 @@ EXCLUDED_PATHS='["/v1/*","/api/*"]'
 # az prints CRLF in Git Bash; strip it from every captured value.
 azv() { az "$@" | tr -d '\r'; }
 # Temp files never outlive the script.
-trap 'rm -f "${yaml:-}" "${tokfile:-}" "${envoyfile:-}" "${tplfile:-}"' EXIT
+trap 'rm -f "${yaml:-}" "${envoyfile:-}" "${tplfile:-}"' EXIT
 
 az account set --subscription "$SUB"
 
@@ -41,7 +41,7 @@ if [ -z "${APP_ID:-}" ]; then
 fi
 export TENANT APP_ID
 # The dashboard answers on HOST and the app's own FQDN only; other names (e.g.
-# headroom.powell-software.com after it moves here) get the API routes only.
+# the proxy's public hostname, PROXY_HOST, after it moves here) get the API routes only.
 export DASHBOARD_HOSTS="$HOST,$FQDN"
 # The gateway's token audience: the registration's App ID URI (entra-gateway-api.sh).
 APP_ID_URI=${APP_ID_URI:-$(azv ad app show --id "$APP_ID" --query "identifierUris[0]" -o tsv)}
@@ -152,31 +152,42 @@ for h in "$HOST" ${GATEWAY_HOST:-}; do
   fi
 done
 
-# 4. Sync the proxy token and the Envoy config, then the container template.
-#    Runs after step 3, so the real token never serves without Easy Auth.
-want_token=$(azv containerapp secret show -n headroom -g "$RG" --secret-name headroom-proxy-token --query value -o tsv)
-: "${want_token:?could not read the proxy token of the headroom app}"
-have_token=$(azv containerapp secret show -n "$APP" -g "$RG" --secret-name headroom-proxy-token --query value -o tsv)
+# 4. The proxy token and the Envoy config, then the container template.
+#    Runs after step 3, so the real token never serves without Easy Auth (a new
+#    app boots with the placeholder "pending").
+#    The token is never copied: the app's secret is a Key Vault reference to
+#    headroom-prod-kv (the token's single home since 2026-11-17), read with the
+#    gateway's user-assigned identity. A rotation is a new secret version there
+#    plus a revision restart; this script needs no re-run for it.
+KV_SECRET_URI=${KV_SECRET_URI:-https://headroom-prod-kv.vault.azure.net/secrets/headroom-proxy-token}
+GATEWAY_IDENTITY=${GATEWAY_IDENTITY:-$(azv identity show -n headroom-gateway-identity -g headroom-prod-rg --query id -o tsv)}
+: "${GATEWAY_IDENTITY:?could not find the gateway identity (headroom-gateway-identity in headroom-prod-rg)}"
+changed=0
+# ARM may return the identity's resource id with different casing: compare case-insensitively.
+if ! azv containerapp show -n "$APP" -g "$RG" --query "keys(identity.userAssignedIdentities || \`{}\`)" -o tsv |
+     grep -qixF "$GATEWAY_IDENTITY"; then
+  az containerapp identity assign -n "$APP" -g "$RG" --user-assigned "$GATEWAY_IDENTITY" -o none
+  echo "attached the gateway identity"
+fi
+have_ref=$(azv containerapp secret list -n "$APP" -g "$RG" \
+  --query "[?name=='headroom-proxy-token'] | [0].join('|', [keyVaultUrl || '', identity || ''])" -o tsv)
+if [ "$(tr 'A-Z' 'a-z' <<<"$have_ref")" != "$(tr 'A-Z' 'a-z' <<<"$KV_SECRET_URI|$GATEWAY_IDENTITY")" ]; then
+  az containerapp secret set -n "$APP" -g "$RG" \
+    --secrets "headroom-proxy-token=keyvaultref:$KV_SECRET_URI,identityref:$GATEWAY_IDENTITY" -o none
+  echo "headroom-proxy-token now references $KV_SECRET_URI"
+  changed=1
+fi
 want_envoy=$(cat "$envoyfile")
 have_envoy=$(azv containerapp secret show -n "$APP" -g "$RG" --secret-name envoy-yaml --query value -o tsv 2>/dev/null || true)
-changed=0
-if [ "$want_token" != "$have_token" ] || [ "$want_envoy" != "$have_envoy" ]; then
-  # Values go through az's @file expansion, never the command line.
-  tokfile=$(mktemp)
-  chmod 600 "$tokfile"
-  printf '%s' "$want_token" > "$tokfile"
-  az containerapp secret set -n "$APP" -g "$RG" \
-    --secrets "headroom-proxy-token=@$tokfile" "envoy-yaml=@$envoyfile" -o none
-  rm -f "$tokfile"
-  # az stores the literal "@path" when it cannot read the file; refuse to go on.
-  if [ "$(azv containerapp secret show -n "$APP" -g "$RG" --secret-name headroom-proxy-token --query value -o tsv)" != "$want_token" ] ||
-     [ "$(azv containerapp secret show -n "$APP" -g "$RG" --secret-name envoy-yaml --query value -o tsv)" != "$want_envoy" ]; then
-    echo "secret sync failed: stored values differ from the source" >&2
+if [ "$want_envoy" != "$have_envoy" ]; then
+  # Through az's @file expansion; az stores the literal "@path" when it cannot read the file.
+  az containerapp secret set -n "$APP" -g "$RG" --secrets "envoy-yaml=@$envoyfile" -o none
+  if [ "$(azv containerapp secret show -n "$APP" -g "$RG" --secret-name envoy-yaml --query value -o tsv)" != "$want_envoy" ]; then
+    echo "secret sync failed: stored envoy-yaml differs from the source" >&2
     exit 1
   fi
   changed=1
 fi
-unset want_token have_token
 
 # The template: Envoy instead of the former Caddy container. A PATCH of
 # properties.template replaces the template only; secrets and ingress stay.
@@ -196,7 +207,7 @@ fi
 if [ "$changed" = 1 ]; then
   az containerapp revision restart -n "$APP" -g "$RG" \
     --revision "$(azv containerapp show -n "$APP" -g "$RG" --query properties.latestRevisionName -o tsv)" -o none
-  echo "synced token/Envoy config and restarted"
+  echo "applied the token reference / Envoy config and restarted"
 fi
 # The Caddy-era `caddyfile` secret is left in place: with rollback-template.$APP.local.json
 # it is the rollback. Remove it by hand once the gateway has run for a while.

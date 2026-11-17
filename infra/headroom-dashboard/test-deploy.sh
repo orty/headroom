@@ -17,7 +17,8 @@ fi
 # Every --secrets value must be name=@file.
 while IFS= read -r line; do
   for arg in $(grep -oE '"[^"]*"' <<<"${line#*--secrets }"); do
-    [[ $arg == \"*=@* ]] || { echo "FAIL --secrets value not read from a file: $arg"; fail=1; }
+    # A value comes from a file (name=@file) or from Key Vault (name=keyvaultref:...), never inline.
+    [[ $arg == \"*=@* || $arg == \"*=keyvaultref:* ]] || { echo "FAIL --secrets value not read from a file or Key Vault: $arg"; fail=1; }
   done
 done < <(grep -- '--secrets' <<<"$code")
 

@@ -159,7 +159,7 @@ static_resources:
             request_headers_to_remove: [x-headroom-gateway-token]
             virtual_hosts:
             # The dashboard is served on its own hostname(s) only (and the app's
-            # ACA FQDN, for tests). Any other name, e.g. headroom.powell-software.com
+            # ACA FQDN, for tests). Any other name, e.g. the proxy's public hostname
             # once it points here, gets the API routes only.
             - name: dashboard
               domains: [__DASHBOARD_DOMAINS__]
