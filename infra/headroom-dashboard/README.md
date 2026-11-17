@@ -105,7 +105,7 @@ assigned too, or Entra refuses their token.
 | Command | `envoy -c /etc/gateway/envoy.yaml --log-level warn` |
 | Ingress | external, target port 8080, `allowInsecure: false` |
 | Scale | 1 to 1 replica, 0.5 vCPU / 1 Gi |
-| Secrets | `headroom-proxy-token` (copy of the `headroom` app's), `envoy-yaml` (rendered config). Written through az's `@file` expansion. The Caddy-era `caddyfile` secret stays for rollback; remove it by hand later. |
+| Secrets | `headroom-proxy-token`: Key Vault reference to `headroom-prod-kv/secrets/headroom-proxy-token` (versionless), read with `headroom-gateway-identity` (attached to the app; Key Vault Secrets User on that secret only). `envoy-yaml`: the rendered config, written through az's `@file` expansion. The Caddy-era `caddyfile` secret stays for rollback; remove it by hand later. |
 | Env | `HEADROOM_PROXY_TOKEN=secretref:headroom-proxy-token` |
 | Volume | Secret volume with `envoy-yaml` at `/etc/gateway/envoy.yaml` |
 | Easy Auth | `RedirectToLoginPage`, `excludedPaths: ["/v1/*", "/api/*"]`, no client secret, no token store |
@@ -146,7 +146,9 @@ certificate once the CNAME resolves.
 
 ## Operations
 
-- **Proxy token.** Re-run `deploy.sh` whenever the `headroom` app's `headroom-proxy-token` changes.
+- **Proxy token.** Its single home is `headroom-prod-kv` (see `infra/headroom-prod/`). Both container apps
+  read it through a Key Vault reference, so a rotation is a new secret version there plus a revision restart
+  of `headroom` and `headroom-dashboard`; `deploy.sh` does not copy it and needs no re-run.
 - **Entra keys.** Envoy caches Entra's JWKS for an hour and refetches on an unknown `kid`.
 - **Rollback.** Before switching an existing app to Envoy, `deploy.sh` saves its Caddy template to
   `rollback-template.<app>.local.json` (git-ignored) and leaves the `caddyfile` secret in place. To roll
