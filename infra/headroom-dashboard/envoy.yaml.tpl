@@ -181,10 +181,17 @@ static_resources:
                 request_headers_to_remove: [cookie, authorization]
                 request_headers_to_add: *proxy_token
               # API routes: any method, Authorization kept (Anthropic
-              # credential), no timeout, no retries (POST bodies are never
-              # replayed), streamed both ways.
+              # credential), no timeout, streamed both ways. One retry, only
+              # when nothing of the request reached headroom (connect failure,
+              # or a reset before the headers were sent): a POST that headroom
+              # may have seen is never replayed.
               - match: { prefix: /v1/ }
-                route: &api { cluster: headroom, host_rewrite_literal: __UPSTREAM_HOST__, timeout: 0s, idle_timeout: 900s }
+                route: &api
+                  cluster: headroom
+                  host_rewrite_literal: __UPSTREAM_HOST__
+                  timeout: 0s
+                  idle_timeout: 900s
+                  retry_policy: { retry_on: "connect-failure,reset-before-request", num_retries: 1 }
                 request_headers_to_remove: [cookie]
                 request_headers_to_add: *proxy_token
               - match: { prefix: /api/ }
@@ -219,7 +226,13 @@ static_resources:
     typed_extension_protocol_options:
       envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
         "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
-        common_http_protocol_options: { idle_timeout: 300s }
+        # Close pooled connections after 3 s idle, before the other side does
+        # (uvicorn's keep-alive is 5 s; ACA's internal ingress sits in
+        # between). A connection closed by the far end while idle in the pool
+        # makes the next request on it fail with 503 UC
+        # (upstream_reset_before_response_started{connection_termination}),
+        # seen twice on 2026-11-18.
+        common_http_protocol_options: { idle_timeout: 3s }
         explicit_http_config: { http_protocol_options: {} }
     circuit_breakers:
       thresholds: [{ max_connections: 4096, max_pending_requests: 4096, max_requests: 4096 }]
