@@ -324,6 +324,20 @@ def main() -> int:
         logs = (tmp / "envoy.log").read_text()
         check("access log never contains a token",
               PROXY_TOKEN not in logs and user not in logs and '"event":"gateway_access"' in logs.replace(" ", ""), logs[-500:])
+        anth_secret = anth["authorization"].split()[-1]
+        check("access log never contains the caller's Anthropic credential (Authorization)",
+              anth_secret not in logs and "authorization" not in logs.lower(), logs[-500:])
+        fields = set()
+        for line in logs.splitlines():
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if rec.get("event") == "gateway_access":
+                fields |= set(rec)
+        allowed = {"event", "method", "path", "status", "flags", "details", "duration_ms", "ttfb_ms",
+                   "user", "principal", "app", "ua"}
+        check("access log fields are exactly the allow-list (no header dump)", fields == allowed, sorted(fields))
     finally:
         proc.terminate()
         proc.wait(5)
