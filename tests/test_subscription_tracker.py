@@ -54,6 +54,8 @@ def test_tracker_notify_active_update_and_basic_state(monkeypatch: pytest.Monkey
     assert tracker.is_active() is False
     assert isinstance(tracker.get_stats(), dict)
 
+    # A disabled tracker ignores bearers; the rest of this test needs one enabled.
+    tracker._enabled = True
     tracker.notify_active("")
     tracker.notify_active("Basic token")
     tracker.notify_active("Bearer sk-ant-api-key")

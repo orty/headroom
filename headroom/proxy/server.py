@@ -190,6 +190,10 @@ from headroom.proxy.project_context import (
 )
 from headroom.proxy.project_policy import split_project_path
 from headroom.proxy.prometheus_metrics import PrometheusMetrics
+from headroom.proxy.query_log_policy import (
+    install_access_log_query_filter,
+    redact_query_string_for_log,
+)
 from headroom.proxy.rate_limiter import TokenBucketRateLimiter
 from headroom.proxy.request_body_limit import RequestBodyLimitMiddleware
 from headroom.proxy.request_logger import RequestLogger
@@ -3441,6 +3445,10 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
     # to 8787), so this is accepted.
     config = config or ProxyConfig()
 
+    # Every process that serves the app (each --workers N worker builds its
+    # own) keeps query values out of uvicorn's access log.
+    install_access_log_query_filter()
+
     # Always-on file logging to ~/.headroom/logs/ for `headroom perf` analysis.
     # Installed here (not at module import) so importing headroom.proxy.server
     # in tests or library contexts does not silently attach a RotatingFileHandler
@@ -4329,9 +4337,9 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
         except Exception:
             logger.debug("record_inbound_request failed", exc_info=True)
         try:
-            from headroom.proxy.helpers import redact_for_wire_debug
+            from headroom.proxy.loggable_headers import loggable_headers
 
-            safe_headers = redact_for_wire_debug(headers)
+            safe_headers = loggable_headers(headers)
         except Exception:
             safe_headers = {"redaction_error": True}
         # A desktop or orchestrator polls these every few seconds; at INFO they
@@ -4346,7 +4354,7 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
             inbound_id,
             method,
             path,
-            query,
+            redact_query_string_for_log(query),
             client_addr,
             request.headers.get("content-length", ""),
             json.dumps(safe_headers, ensure_ascii=False, default=str),
@@ -7121,7 +7129,9 @@ def _get_env_str(name: str, default: str) -> str:
 
 # uvicorn rejects anything outside this set with a KeyError during startup, so an
 # operator typo in HEADROOM_LOG_LEVEL must not be able to stop the proxy booting.
-_UVICORN_LOG_LEVELS = frozenset({"critical", "error", "warning", "info", "debug", "trace"})
+# uvicorn's "trace" level logs every ASGI message, request headers and bodies
+# included, so it is not offered: it is mapped to "debug" with a warning.
+_UVICORN_LOG_LEVELS = frozenset({"critical", "error", "warning", "info", "debug"})
 _UVICORN_LOG_LEVEL_DEFAULT = "warning"
 
 
@@ -7132,6 +7142,12 @@ def _resolve_uvicorn_log_level() -> str:
     value, warning loudly rather than failing the boot.
     """
     raw = _get_env_str("HEADROOM_LOG_LEVEL", _UVICORN_LOG_LEVEL_DEFAULT).strip().lower()
+    if raw == "trace":
+        logger.warning(
+            "HEADROOM_LOG_LEVEL=trace would log request headers and bodies "
+            "(credentials included); using 'debug' instead."
+        )
+        return "debug"
     if raw in _UVICORN_LOG_LEVELS:
         return raw
     logger.warning(

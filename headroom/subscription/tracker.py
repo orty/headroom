@@ -185,7 +185,7 @@ class SubscriptionTracker(QuotaTracker):
         (VAPT 01-F16). Only Bearer tokens that look like OAuth (not API keys)
         are considered.
         """
-        if not token or not token.startswith("Bearer "):
+        if not self._enabled or not token or not token.startswith("Bearer "):
             return
         raw = token[len("Bearer ") :]
         # Skip raw API keys (not OAuth tokens)
@@ -337,6 +337,8 @@ class SubscriptionTracker(QuotaTracker):
         keeping fleet-wide poll rate within Anthropic tolerance. All
         exceptions are swallowed and logged — never propagated.
         """
+        if not self._enabled:
+            return
         now_ts = time.time()
         with self._lock:
             elapsed = now_ts - self._last_on_demand_poll
