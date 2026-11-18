@@ -202,3 +202,28 @@ def test_handler_never_adopts_a_network_callers_bearer(monkeypatch, tmp_path) ->
     monkeypatch.setenv("HEADROOM_ALLOW_UNAUTHENTICATED_BIND", "1")
     tracker = _drive_handler("10.1.2.3", monkeypatch, tmp_path / "net")
     assert tracker._current_token is None
+
+
+def test_disabled_tracker_never_keeps_or_uses_the_bearer(tmp_path) -> None:  # noqa: ANN001
+    tracker = SubscriptionTracker(persist_path=tmp_path / "sub.json", enabled=False)
+    tracker.notify_active("Bearer operator-oauth-token", from_local_operator=True)
+    assert tracker._current_token is None
+
+    polled: list[object] = []
+
+    async def fetch(token):  # noqa: ANN001, ANN202
+        polled.append(token)
+
+    tracker._client.fetch = fetch  # type: ignore[method-assign]
+    asyncio.run(tracker.maybe_poll_on_demand())
+    assert polled == []
+
+
+def test_snapshot_persists_a_fingerprint_not_a_token_prefix() -> None:
+    from headroom.subscription.models import SubscriptionSnapshot
+
+    snap = SubscriptionSnapshot.from_api_response({}, token="sk-ant-oat01-FAKEOAUTH")
+
+    assert len(snap.token_prefix) == 16
+    assert "sk-ant" not in snap.to_dict()["token_prefix"]
+    assert SubscriptionSnapshot.from_api_response({}, token="").token_prefix == ""
