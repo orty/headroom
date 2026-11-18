@@ -7129,7 +7129,9 @@ def _get_env_str(name: str, default: str) -> str:
 
 # uvicorn rejects anything outside this set with a KeyError during startup, so an
 # operator typo in HEADROOM_LOG_LEVEL must not be able to stop the proxy booting.
-_UVICORN_LOG_LEVELS = frozenset({"critical", "error", "warning", "info", "debug", "trace"})
+# uvicorn's "trace" level logs every ASGI message, request headers and bodies
+# included, so it is not offered: it is mapped to "debug" with a warning.
+_UVICORN_LOG_LEVELS = frozenset({"critical", "error", "warning", "info", "debug"})
 _UVICORN_LOG_LEVEL_DEFAULT = "warning"
 
 
@@ -7140,6 +7142,12 @@ def _resolve_uvicorn_log_level() -> str:
     value, warning loudly rather than failing the boot.
     """
     raw = _get_env_str("HEADROOM_LOG_LEVEL", _UVICORN_LOG_LEVEL_DEFAULT).strip().lower()
+    if raw == "trace":
+        logger.warning(
+            "HEADROOM_LOG_LEVEL=trace would log request headers and bodies "
+            "(credentials included); using 'debug' instead."
+        )
+        return "debug"
     if raw in _UVICORN_LOG_LEVELS:
         return raw
     logger.warning(
