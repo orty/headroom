@@ -22,7 +22,7 @@ def test_defaults_to_warning_when_unset() -> None:
     assert _resolve_uvicorn_log_level() == "warning"
 
 
-@pytest.mark.parametrize("level", ["critical", "error", "warning", "info", "debug", "trace"])
+@pytest.mark.parametrize("level", ["critical", "error", "warning", "info", "debug"])
 def test_accepts_every_uvicorn_level(level: str, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HEADROOM_LOG_LEVEL", level)
 
@@ -43,3 +43,10 @@ def test_unrecognized_value_falls_back_instead_of_raising(
     monkeypatch.setenv("HEADROOM_LOG_LEVEL", bad)
 
     assert _resolve_uvicorn_log_level() == "warning"
+
+
+def test_trace_is_mapped_to_debug(monkeypatch: pytest.MonkeyPatch) -> None:
+    """uvicorn's trace level logs request headers and bodies, credentials included."""
+    monkeypatch.setenv("HEADROOM_LOG_LEVEL", "TRACE")
+
+    assert _resolve_uvicorn_log_level() == "debug"
