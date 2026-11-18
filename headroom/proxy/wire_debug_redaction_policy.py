@@ -13,9 +13,12 @@ WIRE_DEBUG_SECRET_KEYS = (
     "cookie",
     "set-cookie",
     "api-key",
+    "apikey",
     "x-api-key",
     "openai-api-key",
     "anthropic-api-key",
+    # Codex's signed device attestation, sent with every request.
+    "x-oai-attestation",
     "access_token",
     "refresh_token",
     "id_token",
@@ -39,7 +42,56 @@ _SECRET_KEY_SUFFIXES = (
     "_token",
     "_credential",
     "_credentials",
+    # Any ``*-key`` header carries a key: Ocp-Apim-Subscription-Key,
+    # X-Functions-Key, x-goog-api-key.
+    "_key",
 )
+
+# A name with any of these as a ``_``-separated word is a secret wherever the
+# word sits: X-Walter-Ops-Key, X-Auth-Token-Id, X-Amz-Signature, session ids.
+# Word match, not substring, so the usage counters (``max_tokens``,
+# ``input_tokens``) and ``author`` stay readable.
+_SECRET_KEY_WORDS = frozenset(
+    {
+        "auth",
+        "key",
+        "apikey",
+        "secret",
+        "token",
+        "password",
+        "passwd",
+        "credential",
+        "credentials",
+        "session",
+        "signature",
+        "sig",
+        "cookie",
+    }
+)
+
+# Substrings that mark a secret even inside a run-together name
+# (``xauthtoken``, ``clientsecret``, ``x-apikey``).
+_SECRET_KEY_SUBSTRINGS = (
+    "authorization",
+    "apikey",
+    "authtoken",
+    "accesstoken",
+    "secret",
+    "password",
+    "passwd",
+    "credential",
+    "signature",
+)
+
+# Identity headers set by a fronting platform: Easy Auth's encoded principal
+# and the mTLS client certificate. Headroom's own x-headroom-* identity headers
+# stay readable.
+_SECRET_EXACT_KEYS = frozenset({"x_ms_client_principal", "x_forwarded_client_cert"})
+
+# Usage counters (``token_count``, ``max_tokens``) are numbers, not secrets,
+# and ``key_id`` names a key without being one.
+_COUNTER_SUFFIXES = ("_count", "_tokens")
+_READABLE_KEYS = frozenset({"key_id"})
 
 
 def should_redact_key(key: str) -> bool:
@@ -47,7 +99,13 @@ def should_redact_key(key: str) -> bool:
     normalized = key.lower().replace("-", "_")
     if normalized in {marker.replace("-", "_") for marker in WIRE_DEBUG_SECRET_KEYS}:
         return True
-    return normalized.endswith(_SECRET_KEY_SUFFIXES)
+    if normalized in _SECRET_EXACT_KEYS or normalized.endswith(_SECRET_KEY_SUFFIXES):
+        return True
+    if normalized in _READABLE_KEYS or normalized.endswith(_COUNTER_SUFFIXES):
+        return False
+    if any(marker in normalized for marker in _SECRET_KEY_SUBSTRINGS):
+        return True
+    return any(word in _SECRET_KEY_WORDS for word in normalized.split("_"))
 
 
 def redact_for_wire_debug(value: Any) -> Any:
