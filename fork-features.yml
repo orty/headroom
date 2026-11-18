@@ -133,3 +133,19 @@ features:
   - branch: feat/dashboard-requests-for-token-holders
     upstream_pr: headroomlabs-ai/headroom#4168
     active: false
+  # Security backport onto the v0.44.0 base (released as v0.44.1-alpha.2).
+  # Part 1: carry upstream #4865 (credentials out of proxy logs and 400 debug
+  # dumps), merged upstream as dffc4dcc after v0.44.0. The backport branch below
+  # holds the same commit, but the replay filter (--cherry-pick against
+  # upstream/main) drops it by patch-id, so it is carried by PR number here.
+  # Retired automatically once a release base contains it.
+  - branch: carry/headroom-4865-credential-log-redaction
+    upstream_pr: headroomlabs-ai/headroom#4865
+    active: true
+  # Part 2: the four follow-up hardening commits (secret-word redaction,
+  # HEADROOM_LOG_LEVEL=trace, subscription token fingerprint + opt-out, header
+  # allow-list), cherry-picked onto upstream v0.44.0. Not upstream PRs: set
+  # active: false by hand once a release base carries equivalent fixes.
+  - branch: fix/security-backport-0.44.1-feature
+    upstream_pr: null
+    active: true
