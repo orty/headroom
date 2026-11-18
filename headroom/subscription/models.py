@@ -10,6 +10,7 @@ Mirrors the Anthropic OAuth usage API response exactly, including:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -286,6 +287,17 @@ class ExtraUsage:
 # ---------------------------------------------------------------------------
 
 
+def token_fingerprint(token: str) -> str:
+    """Return a non-reversible account fingerprint: sha256 hex, first 16 chars.
+
+    Persisted in place of a token prefix, so the state file never holds any
+    part of the OAuth token. Older state files with an 8-char prefix still load.
+    """
+    if not token:
+        return ""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
+
+
 @dataclass
 class SubscriptionSnapshot:
     """One complete poll of GET /api/oauth/usage."""
@@ -297,11 +309,14 @@ class SubscriptionSnapshot:
     extra_usage: ExtraUsage = field(default_factory=ExtraUsage)
     polled_at: datetime = field(default_factory=_utc_now)
     token_prefix: str = ""
-    """First 8 chars of the OAuth token (for multi-account detection)."""
+    """sha256 fingerprint of the OAuth token (for multi-account detection).
+
+    State written before this change holds the token's first 8 chars here.
+    """
 
     @classmethod
     def from_api_response(cls, data: dict[str, Any], *, token: str = "") -> SubscriptionSnapshot:
-        snap = cls(token_prefix=token[:8] if token else "")
+        snap = cls(token_prefix=token_fingerprint(token))
         if "five_hour" in data and data["five_hour"]:
             snap.five_hour = RateLimitWindow.from_api_dict(data["five_hour"])
         if "seven_day" in data and data["seven_day"]:
