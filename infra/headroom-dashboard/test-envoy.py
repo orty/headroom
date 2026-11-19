@@ -39,6 +39,7 @@ APP_ID = str(uuid.uuid4())
 OTHER_APP = str(uuid.uuid4())
 PROXY_TOKEN = "test-proxy-token-" + uuid.uuid4().hex
 KID = "test-kid"
+STALE_HITS: list[float] = []  # arrivals of /v1/stale-test at the mock Headroom
 
 
 def free_port() -> int:
@@ -86,6 +87,15 @@ class Upstream(http.server.BaseHTTPRequestHandler):
     def _echo(self):
         length = int(self.headers.get("content-length") or 0)
         body = self.rfile.read(length) if length else b""
+        served, self.served = getattr(self, "served", 0), getattr(self, "served", 0) + 1
+        if self.path == "/v1/stale-test":
+            STALE_HITS.append(time.time())
+            if served:
+                # A pooled connection the far end closes as the next request
+                # arrives: no response, connection closed (what Envoy saw on
+                # 2026-11-18 as 503 UC connection_termination).
+                self.close_connection = True
+                return
         if self.path.startswith("/v1/messages") and b'"stream": true' in body:
             self.send_response(200)
             self.send_header("content-type", "text/event-stream")
@@ -289,9 +299,45 @@ def main() -> int:
               r.status == 200 and first.startswith(b"event: ping") and t_first < 0.8 and t_all > 2.5
               and rest.count(b"event: ping") == 2, (r.status, t_first, t_all))
 
+        # Stale pooled connections. Reused within the idle timeout, a connection
+        # the far end drops gives a 503 and the POST is not replayed (headers
+        # were sent). After 3 s idle Envoy has closed it itself, so the request
+        # goes on a fresh connection.
+        # Envoy may pick a fresh connection, so try until the drop happens.
+        seen = []
+        for _ in range(10):
+            call("POST", "/v1/messages", {**anth, "x-headroom-gateway-token": user}, b"{}")
+            STALE_HITS.clear()
+            s, _ = call("POST", "/v1/stale-test", {**anth, "x-headroom-gateway-token": user}, b"{}")
+            seen.append((s, len(STALE_HITS)))
+            if s == 503:
+                break
+        check("dropped reused connection -> 503, POST not replayed", seen[-1] == (503, 1)
+              and all(h == 1 for _, h in seen), seen)
+        time.sleep(3.5)
+        call("POST", "/v1/messages", {**anth, "x-headroom-gateway-token": user}, b"{}")
+        time.sleep(3.5)
+        STALE_HITS.clear()
+        s, _ = call("POST", "/v1/stale-test", {**anth, "x-headroom-gateway-token": user}, b"{}")
+        check("after 3 s idle the pooled connection is gone -> fresh connection, 200", s == 200 and len(STALE_HITS) == 1, (s, len(STALE_HITS)))
+
         logs = (tmp / "envoy.log").read_text()
         check("access log never contains a token",
               PROXY_TOKEN not in logs and user not in logs and '"event":"gateway_access"' in logs.replace(" ", ""), logs[-500:])
+        anth_secret = anth["authorization"].split()[-1]
+        check("access log never contains the caller's Anthropic credential (Authorization)",
+              anth_secret not in logs and "authorization" not in logs.lower(), logs[-500:])
+        fields = set()
+        for line in logs.splitlines():
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if rec.get("event") == "gateway_access":
+                fields |= set(rec)
+        allowed = {"event", "method", "path", "status", "flags", "details", "duration_ms", "ttfb_ms",
+                   "user", "principal", "app", "ua"}
+        check("access log fields are exactly the allow-list (no header dump)", fields == allowed, sorted(fields))
     finally:
         proc.terminate()
         proc.wait(5)

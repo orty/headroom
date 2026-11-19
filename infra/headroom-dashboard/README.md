@@ -62,8 +62,11 @@ Services (managed identity) ────────┘       ├─ Easy Auth s
   registration's token version never has to change.
 - **Errors.** Missing, malformed, expired, wrong-tenant or badly signed token: 401. Wrong audience:
   403 (Envoy's choice). Valid token without the scope or role: 403.
-- **Streaming.** No buffering, no route timeout, 900 s idle timeout, no retries (POST bodies are never
-  replayed).
+- **Streaming.** No buffering, no route timeout, 900 s idle timeout. One retry only when nothing of the
+  request reached headroom (`connect-failure`, `reset-before-request`); a POST headroom may have seen is never
+  replayed. Pooled upstream connections close after 3 s idle, so the gateway never reuses one the far end has
+  already closed (that race gave single 503s with flag `UC` on 2026-11-18). Clients (Claude Code, the Agent SDK)
+  retry a 5xx themselves; a laptop shim must not switch path on a single 503.
 - **Token handling.** The proxy token is read from the env at request time
   (`%ENVIRONMENT(HEADROOM_PROXY_TOKEN)%`), never rendered into the config. No admin listener. The
   access log (JSON on stdout) has method, path, status, timings and the caller tags, never a token.
