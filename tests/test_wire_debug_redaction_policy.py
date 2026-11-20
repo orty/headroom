@@ -123,3 +123,12 @@ def test_wire_debug_keeps_routing_and_identity_headers_readable() -> None:
         "model",
     ):
         assert not should_redact_key(key), key
+
+
+def test_wire_debug_redacts_metadata_user_id() -> None:
+    redacted = redact_for_wire_debug(
+        {"metadata": {"user_id": '{"account_uuid":"abc"}', "trace_id": "t1"}}
+    )
+    assert redacted["metadata"]["user_id"] == WIRE_DEBUG_REDACTED
+    assert redacted["metadata"]["trace_id"] == "t1"
+    assert not should_redact_key("x-headroom-user-id")
