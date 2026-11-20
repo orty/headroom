@@ -29,6 +29,9 @@ WIRE_DEBUG_SECRET_KEYS = (
     "token",
     "credential",
     "credentials",
+    # metadata.user_id names the account, device and session (Codex and
+    # Claude Code body dumps).
+    "user_id",
 )
 
 # Suffixes that make a prefixed key a secret. ``_token`` covers the auth,

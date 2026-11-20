@@ -43,6 +43,7 @@ from headroom.copilot_auth import apply_copilot_api_auth, is_copilot_upstream_ur
 from headroom.log_safety import describe_exception, safe_id
 from headroom.pipeline import PipelineStage, summarize_routing_markers
 from headroom.proxy import public_errors
+from headroom.proxy.account_pseudonym import log_account_tag
 from headroom.proxy.anthropic_wire import (
     build_anthropic_upstream_url,
     fold_anthropic_stream,
@@ -1610,6 +1611,7 @@ class AnthropicHandlerMixin:
                         },
                     },
                 )
+            log_account_tag(request.headers, body, request_id)
             if len(original_body_bytes) > COMPRESSION_BODY_MAX_BYTES:
                 logger.info(
                     "[%s] event=compression_passthrough reason=request_body_soft_limit "
@@ -6295,6 +6297,12 @@ class AnthropicHandlerMixin:
             )
 
         requests_list = body.get("requests", [])
+        _first = requests_list[0] if isinstance(requests_list, list) and requests_list else None
+        log_account_tag(
+            request.headers,
+            _first.get("params") if isinstance(_first, dict) else body,
+            request_id,
+        )
         if not requests_list:
             return JSONResponse(
                 status_code=400,
