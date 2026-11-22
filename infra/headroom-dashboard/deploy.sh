@@ -59,6 +59,10 @@ fi
 envoyfile=$(mktemp)
 ./render-envoy.sh > "$envoyfile"
 
+# Two replicas: a restart (failed probe, platform maintenance) cuts half of the
+# open streams instead of all of them. Envoy and Easy Auth keep no state here.
+REPLICAS=${REPLICAS:-2}
+
 # The container template (Envoy, its config from a secret volume), as JSON so the
 # create branch (YAML accepts JSON) and the PATCH below share one definition.
 # A new app boots with the token "pending", so nothing real is exposed before
@@ -69,8 +73,15 @@ template_json() {
    "command": ["envoy", "-c", "/etc/gateway/envoy.yaml", "--log-level", "warn"],
    "resources": {"cpu": 0.5, "memory": "1Gi"},
    "env": [{"name": "HEADROOM_PROXY_TOKEN", "secretRef": "headroom-proxy-token"}],
-   "volumeMounts": [{"volumeName": "gateway-config", "mountPath": "/etc/gateway"}]}],
- "scale": {"minReplicas": 1, "maxReplicas": 1},
+   "volumeMounts": [{"volumeName": "gateway-config", "mountPath": "/etc/gateway"}],
+   "probes": [
+     {"type": "Startup", "httpGet": {"path": "/healthz", "port": 8080},
+      "initialDelaySeconds": 1, "periodSeconds": 2, "timeoutSeconds": 3, "failureThreshold": 30},
+     {"type": "Readiness", "httpGet": {"path": "/healthz", "port": 8080},
+      "periodSeconds": 5, "timeoutSeconds": 3, "failureThreshold": 3},
+     {"type": "Liveness", "httpGet": {"path": "/healthz", "port": 8080},
+      "periodSeconds": 10, "timeoutSeconds": 5, "failureThreshold": 3}]}],
+ "scale": {"minReplicas": $REPLICAS, "maxReplicas": $REPLICAS},
  "volumes": [{"name": "gateway-config", "storageType": "Secret",
               "secrets": [{"secretRef": "envoy-yaml", "path": "envoy.yaml"}]}]}
 EOF
@@ -189,19 +200,25 @@ if [ "$want_envoy" != "$have_envoy" ]; then
   changed=1
 fi
 
-# The template: Envoy instead of the former Caddy container. A PATCH of
-# properties.template replaces the template only; secrets and ingress stay.
-have_image=$(azv containerapp show -n "$APP" -g "$RG" --query "properties.template.containers[0].image" -o tsv)
-if [ "$have_image" != "$ENVOY_IMAGE" ]; then
-  # Rollback: az rest --method patch --body @rollback-template.$APP.local.json --url <same url>
-  [ -f "rollback-template.$APP.local.json" ] ||
-    azv containerapp show -n "$APP" -g "$RG" --query "{properties: {template: properties.template}}" -o json \
-      > "rollback-template.$APP.local.json"
+# The template (image, probes, replicas). A PATCH of properties.template replaces
+# the template only; secrets and ingress stay. It runs after the secret sync above,
+# so a new revision boots with the current Envoy config (which serves /healthz
+# for the probes).
+want_tpl="$ENVOY_IMAGE|$REPLICAS|$REPLICAS|Liveness:/healthz,Readiness:/healthz,Startup:/healthz"
+have_tpl=$(azv containerapp show -n "$APP" -g "$RG" --query "properties.template.join('|', [containers[0].image, to_string(scale.minReplicas), to_string(scale.maxReplicas), join(',', sort(containers[0].probes[].join(':', [type, httpGet.path || 'tcp']) || \`[]\`))])" -o tsv)
+if [ "$have_tpl" != "$want_tpl" ]; then
+  # Rollback: az rest --method patch --body @<snapshot> --url <same url>.
+  # rollback-template.$APP.local.json is the first snapshot (Caddy era); each
+  # template change also keeps its own dated snapshot.
+  snap="rollback-template.$APP.$(date -u +%Y%m%dT%H%M%SZ).local.json"
+  azv containerapp show -n "$APP" -g "$RG" --query "{properties: {template: properties.template}}" -o json > "$snap"
+  [ -f "rollback-template.$APP.local.json" ] || cp "$snap" "rollback-template.$APP.local.json"
+  echo "template: '$have_tpl' -> '$want_tpl' (rollback snapshot $snap)"
   tplfile=$(mktemp)
   printf '{"properties": {"template": %s}}' "$(template_json)" > "$tplfile"
   az rest --method patch --body "@$tplfile" -o none \
     --url "https://management.azure.com$(azv containerapp show -n "$APP" -g "$RG" --query id -o tsv)?api-version=2024-03-01"
-  echo "switched the container to $ENVOY_IMAGE (new revision)"
+  echo "applied the container template (new revision)"
   changed=0
 fi
 if [ "$changed" = 1 ]; then

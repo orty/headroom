@@ -35,6 +35,8 @@ static_resources:
           request_timeout: 0s
           access_log:
           - name: envoy.access_loggers.stdout
+            # Not the container probes on /healthz (every few seconds per replica).
+            filter: { header_filter: { header: { name: ":path", string_match: { exact: /healthz }, invert_match: true } } }
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
               log_format:
@@ -164,6 +166,9 @@ static_resources:
             - name: dashboard
               domains: [__DASHBOARD_DOMAINS__]
               routes:
+              # Container probes: answered by Envoy itself, never forwarded, no token.
+              - match: { path: /healthz }
+                direct_response: &healthz { status: 200, body: { inline_string: "ok\n" } }
               # Browser routes: GET only. FastAPI registers no HEAD for its
               # GET routes, so a HEAD would reach Headroom's passthrough relay.
               - match: { path: /, headers: [{ name: ":method", string_match: { exact: GET } }] }
@@ -203,6 +208,8 @@ static_resources:
             - name: api-only
               domains: ["*"]
               routes:
+              - match: { path: /healthz }
+                direct_response: *healthz
               - match: { prefix: /v1/ }
                 route: *api
                 request_headers_to_remove: [cookie]

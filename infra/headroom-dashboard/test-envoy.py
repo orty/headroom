@@ -285,6 +285,16 @@ def main() -> int:
         s, _ = call("POST", "/v1/messages", {**anth, "host": "headroom.example.test"}, b"{}")
         check("API on another hostname without token -> 401", s == 401, s)
 
+        # Container probes: answered by Envoy itself on any hostname, no token,
+        # never forwarded, never in the access log.
+        for host in ("127.0.0.1", "dashboard.example.test", "10.0.0.7", "anything.example"):
+            c = http.client.HTTPConnection("127.0.0.1", gw_port, timeout=10)
+            c.request("GET", "/healthz", headers={"Host": host})
+            r = c.getresponse()
+            body = r.read()
+            c.close()
+            check(f"GET /healthz (Host {host}) -> 200 from Envoy", r.status == 200 and body == b"ok\n", (r.status, body))
+
         # Streaming: first event must arrive long before the stream ends.
         c = http.client.HTTPConnection("127.0.0.1", gw_port, timeout=30)
         t0 = time.time()
@@ -324,6 +334,7 @@ def main() -> int:
         logs = (tmp / "envoy.log").read_text()
         check("access log never contains a token",
               PROXY_TOKEN not in logs and user not in logs and '"event":"gateway_access"' in logs.replace(" ", ""), logs[-500:])
+        check("probes are not in the access log", "/healthz" not in logs, logs[-300:])
         anth_secret = anth["authorization"].split()[-1]
         check("access log never contains the caller's Anthropic credential (Authorization)",
               anth_secret not in logs and "authorization" not in logs.lower(), logs[-500:])
