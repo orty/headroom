@@ -87,9 +87,37 @@ def test_log_line_gateway_request(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.INFO, logger="headroom.proxy"):
         log_account_tag(headers, _json_body(), "req-1")
     assert _account_lines(caplog) == [
-        f"account_tag route=gateway user=alice acct={_h(ACCOUNT)} dev=- ip=- request_id=req-1"
+        f"account_tag route=gateway user=alice principal=- app=- acct={_h(ACCOUNT)} dev=- ip=- request_id=req-1"
     ]
     _assert_no_raw(caplog)
+
+
+def test_log_line_app_only_gateway_request(caplog: pytest.LogCaptureFixture) -> None:
+    principal = "11111111-2222-3333-4444-555555555555"
+    app = "66666666-7777-8888-9999-000000000000"
+    headers = {
+        "x-headroom-principal": principal,
+        "x-headroom-app": app,
+        "x-forwarded-for": "203.0.113.9",
+    }
+    with caplog.at_level(logging.INFO, logger="headroom.proxy"):
+        log_account_tag(headers, _json_body(), "req-5")
+    assert _account_lines(caplog) == [
+        f"account_tag route=gateway user=- principal={principal} app={app}"
+        f" acct={_h(ACCOUNT)} dev=- ip=- request_id=req-5"
+    ]
+    _assert_no_raw(caplog)
+
+
+@pytest.mark.parametrize("header", ["x-headroom-principal", "x-headroom-app"])
+def test_log_line_any_gateway_header_means_gateway(
+    caplog: pytest.LogCaptureFixture, header: str
+) -> None:
+    with caplog.at_level(logging.INFO, logger="headroom.proxy"):
+        log_account_tag({header: "abc", "x-forwarded-for": "203.0.113.9"}, {}, "req-6")
+    (line,) = _account_lines(caplog)
+    assert line.startswith("account_tag route=gateway user=- ")
+    assert " ip=- " in line
 
 
 def test_log_line_legacy_request(caplog: pytest.LogCaptureFixture) -> None:
@@ -98,8 +126,9 @@ def test_log_line_legacy_request(caplog: pytest.LogCaptureFixture) -> None:
         log_account_tag(headers, _json_body(account=""), "req-2")
         log_account_tag({"x-envoy-external-address": "192.0.2.4", **headers}, {}, "req-3")
     assert _account_lines(caplog) == [
-        f"account_tag route=legacy user=- acct=- dev={_h(DEVICE)} ip=198.51.100.7 request_id=req-2",
-        "account_tag route=legacy user=- acct=- dev=- ip=192.0.2.4 request_id=req-3",
+        f"account_tag route=legacy user=- principal=- app=- acct=- dev={_h(DEVICE)}"
+        " ip=198.51.100.7 request_id=req-2",
+        "account_tag route=legacy user=- principal=- app=- acct=- dev=- ip=192.0.2.4 request_id=req-3",
     ]
     _assert_no_raw(caplog)
 
@@ -108,7 +137,17 @@ def test_log_line_header_cannot_forge_fields(caplog: pytest.LogCaptureFixture) -
     with caplog.at_level(logging.INFO, logger="headroom.proxy"):
         log_account_tag({"x-headroom-user": "bob acct=forged"}, {}, "req-4")
     (line,) = _account_lines(caplog)
-    assert "user=bob_acct=forged acct=-" in line
+    assert "user=bob_acct=forged principal=- app=- acct=-" in line
+
+
+def test_log_line_principal_and_app_cannot_forge_fields(caplog: pytest.LogCaptureFixture) -> None:
+    headers = {"x-headroom-principal": "p acct=forged", "x-headroom-app": "a\tip=1.2.3.4"}
+    with caplog.at_level(logging.INFO, logger="headroom.proxy"):
+        log_account_tag(headers, {}, "req-7")
+    (line,) = _account_lines(caplog)
+    assert "principal=p_acct=forged app=a_ip=1.2.3.4 acct=- dev=- ip=- " in line
+    assert line.count(" acct=") == 1
+    assert line.count(" ip=") == 1
 
 
 class _OkTransport(httpx.AsyncBaseTransport):
@@ -130,8 +169,12 @@ class _OkTransport(httpx.AsyncBaseTransport):
 @pytest.mark.parametrize(
     ("extra_headers", "expected"),
     [
-        ({"x-headroom-user": "alice"}, "route=gateway user=alice"),
-        ({"x-envoy-external-address": "192.0.2.4"}, "route=legacy user=-"),
+        ({"x-headroom-user": "alice"}, "route=gateway user=alice principal=- app=-"),
+        (
+            {"x-headroom-principal": "p-guid", "x-headroom-app": "a-guid"},
+            "route=gateway user=- principal=p-guid app=a-guid",
+        ),
+        ({"x-envoy-external-address": "192.0.2.4"}, "route=legacy user=- principal=- app=-"),
     ],
 )
 def test_messages_handler_logs_account_tag(
