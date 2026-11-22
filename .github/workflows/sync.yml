@@ -22,6 +22,14 @@ name: Sync (rebuild main-alpha)
 on:
   schedule:
     - cron: '*/30 * * * *'
+  # Rebuild as soon as the overlay changes: the cron above really fires every
+  # 4-8 h. A push run uses fork-overlay's copy of this file, which is the same
+  # file the overlay ships; nothing below depends on the triggering ref (the
+  # checkout is pinned to main-alpha and scripts are read from
+  # origin/fork-overlay). alpha-release.yml skips the alpha when only fork
+  # tooling changed, so this does not restart Headroom.
+  push:
+    branches: [fork-overlay]
   workflow_dispatch:
 
 permissions:
@@ -31,6 +39,8 @@ permissions:
   # FORK_RELEASE_PAT, not this GITHUB_TOKEN.)
   actions: read
 
+# One repo-wide group, whatever the trigger or ref: a cron run and a
+# fork-overlay push run must never race the force-push to main-alpha.
 concurrency:
   group: fork-sync
   cancel-in-progress: false
