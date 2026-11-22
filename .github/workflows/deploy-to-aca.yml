@@ -1,0 +1,270 @@
+name: Deploy to Azure Container Apps
+
+# Triggers AFTER the Release workflow completes successfully (not on release
+# published directly) so the Docker image is guaranteed to exist.
+#
+# Image routing:
+# - Fork pre-release tag (contains -alpha/-beta/-rc): $FORK_IMAGE:<tag>
+#   (repo variable FORK_IMAGE, else ghcr.io/orty/headroom)
+# - Stable mirrored tag (e.g. v0.26.0): ghcr.io/headroomlabs-ai/headroom:<tag>
+#
+# REQUIRED SECRETS:
+#   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag to deploy (empty = latest fork image)'
+        required: false
+        default: ''
+      walter_guard_max_minutes:
+        description: 'Max minutes to wait for running W.A.L.T.E.R. jobs before deploying anyway'
+        required: false
+        default: '75'
+      skip_walter_guard:
+        description: 'Emergency: deploy without waiting for W.A.L.T.E.R. jobs'
+        type: boolean
+        required: false
+        default: false
+      walter_guard_idle_minutes:
+        description: 'W.A.L.T.E.R. counts as busy if it called Headroom in the last N minutes (2-30)'
+        required: false
+        default: '5'
+      walter_guard_check_only:
+        description: 'Dry run: log in, run the W.A.L.T.E.R. guard query once, print busy/idle, deploy nothing'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ACA_NAME: headroom
+  ACA_RG: RG-SAR
+  # Repo variable FORK_IMAGE (e.g. headroomprodacr.azurecr.io/headroom) wins.
+  FORK_IMAGE: ${{ vars.FORK_IMAGE || 'ghcr.io/orty/headroom' }}
+  UPSTREAM_IMAGE: ghcr.io/headroomlabs-ai/headroom
+
+jobs:
+  deploy:
+    # Only deploy when Release workflow succeeded (or manual dispatch)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Resolve image
+        id: image
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # An explicit tag from a manual dispatch wins.
+          TAG=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          fi
+
+          # Otherwise resolve from the releases list. The triggering tag is NOT
+          # in the workflow_run payload, and the run's head-branch field is the
+          # *branch* (main-alpha) — which contains "-alpha" and mis-routes to the
+          # dev image (the bug that made /readyz report 0.26.0). `gh release view`
+          # ignores pre-releases (fork builds are -alpha), so that won't help.
+          #
+          # Pick the HIGHEST-SEMVER non-draft release, NOT the most recent by
+          # time: an upstream bump cuts both a stable mirror (vX.Y.Z) and a fork
+          # alpha (vX.Y.(Z+1)-alpha.N) on the same push, and they publish in a
+          # non-deterministic order. The alpha is always the higher version, so
+          # selecting by version guarantees ACA converges on the customized alpha
+          # image rather than the bare upstream stable.
+          if [ -z "$TAG" ]; then
+            TAG="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 50 \
+              --json tagName,isDraft \
+              -q '.[] | select(.isDraft == false) | .tagName' | sort -V | tail -1)"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::could not resolve a release tag to deploy"
+            exit 1
+          fi
+
+          # Superseded Release: when two alphas are cut minutes apart, the OLDER
+          # Release can finish first, and the highest tag above then names the
+          # newer alpha, whose image its own Release is still building --
+          # deploying now fails with MANIFEST_UNKNOWN. For a release-event run,
+          # head_branch is the release TAG, so stand down when it is not the
+          # one resolved above: the newer Release's own completion deploys it.
+          # (If head_branch is a branch, `gh release view` fails and nothing
+          # changes -- the historical main-alpha case stays covered.)
+          TRIGGER="${{ github.event.workflow_run.head_branch }}"
+          if [ "${{ github.event_name }}" = "workflow_run" ] && [ -n "$TRIGGER" ] \
+             && [ "$TRIGGER" != "$TAG" ] \
+             && gh release view "$TRIGGER" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::notice::Release ${TRIGGER} finished, but ${TAG} is newer; its own Release will deploy it. Skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Published image tags drop the leading "v" (docker.yml strips it),
+          # so normalize before building the pull reference.
+          TAG="${TAG#v}"
+
+          if echo "$TAG" | grep -qE -- '-alpha|-beta|-rc'; then
+            echo "image=${FORK_IMAGE}:${TAG}" >> "$GITHUB_OUTPUT"
+          else
+            echo "image=${UPSTREAM_IMAGE}:${TAG}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Azure Login (OIDC)
+        if: steps.image.outputs.skip != 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # A deploy restarts the proxy, which breaks W.A.L.T.E.R. pipeline jobs
+      # mid-run (their model calls go through Headroom). Wait while W.A.L.T.E.R.
+      # has called Headroom in the last IDLE minutes, as seen by the gateway's
+      # Envoy access log (headroom-dashboard, event gateway_access, field app =
+      # X-Headroom-App). The gateway logs every route, including the
+      # count_tokens heartbeat W.A.L.T.E.R. sends every 120 s during a run.
+      # A query the SP cannot run is dropped with a warning, never fails the
+      # deploy; at the cap, deploy anyway. walter_guard_check_only runs the
+      # query once and stops (there, a failed query fails the run).
+      - name: Wait for W.A.L.T.E.R. jobs
+        if: >-
+          steps.image.outputs.skip != 'true' &&
+          (inputs.walter_guard_check_only == true || inputs.skip_walter_guard != true)
+        env:
+          WALTER_GUARD_MAX_MINUTES: ${{ inputs.walter_guard_max_minutes || '75' }}
+          WALTER_GUARD_IDLE_MINUTES: ${{ inputs.walter_guard_idle_minutes || '5' }}
+          CHECK_ONLY: ${{ inputs.walter_guard_check_only == true }}
+          LA_WORKSPACE: ${{ vars.LA_WORKSPACE || '2cf1d2d4-cb02-4f04-9f67-9a5818575acb' }}
+          WALTER_APP: 1c66bdc9
+        run: |
+          set -uo pipefail
+          MAX="${WALTER_GUARD_MAX_MINUTES}"
+          case "$MAX" in ''|*[!0-9]*) echo "::warning::walter_guard_max_minutes '${MAX}' is not a number; using 75"; MAX=75 ;; esac
+          IDLE="${WALTER_GUARD_IDLE_MINUTES}"
+          if ! [[ "$IDLE" =~ ^[0-9]+$ ]] || [ "$IDLE" -lt 2 ] || [ "$IDLE" -gt 30 ]; then
+            echo "::error::walter_guard_idle_minutes '${IDLE}' must be an integer from 2 to 30"
+            exit 1
+          fi
+          KQL="ContainerAppConsoleLogs_CL | where TimeGenerated > ago(${IDLE}m) and ContainerAppName_s == \"headroom-dashboard\" and Log_s has \"gateway_access\" and Log_s has \"${WALTER_APP}\" | count"
+          start="$(date +%s)"
+          while :; do
+            if ! recent="$(az monitor log-analytics query -w "$LA_WORKSPACE"                 --analytics-query "$KQL" --query '[0].Count' -o tsv 2>/tmp/walter-logs.err)"                || ! [[ "$recent" =~ ^[0-9]+$ ]]; then
+              if [ "$CHECK_ONLY" = true ]; then
+                echo "::error::check-only: cannot query Log Analytics for W.A.L.T.E.R. traffic: $(head -c 300 /tmp/walter-logs.err)"
+                exit 1
+              fi
+              echo "::warning::cannot query Log Analytics for W.A.L.T.E.R. traffic; deploying without waiting: $(head -c 300 /tmp/walter-logs.err)"
+              break
+            fi
+            if [ "$CHECK_ONLY" = true ]; then
+              state=idle; [ "$recent" -gt 0 ] && state=busy
+              echo "check-only: W.A.L.T.E.R. ${state} (gateway calls in last ${IDLE} min: ${recent})"
+              break
+            fi
+            elapsed=$(( ($(date +%s) - start) / 60 ))
+            if [ "$recent" -eq 0 ]; then
+              echo "W.A.L.T.E.R. idle after ${elapsed} min; deploying"
+              break
+            fi
+            if [ "$elapsed" -ge "$MAX" ]; then
+              echo "::warning::deploying anyway after ${elapsed} min: W.A.L.T.E.R. still busy (gateway calls in last ${IDLE} min: ${recent})"
+              break
+            fi
+            echo "waiting (${elapsed}/${MAX} min): W.A.L.T.E.R. gateway calls in last ${IDLE} min=${recent}"
+            sleep 60
+          done
+
+      # The OIDC login above can expire during a long wait (~1 h); log in again.
+      - name: Azure Login (OIDC, after wait)
+        if: steps.image.outputs.skip != 'true' && inputs.skip_walter_guard != true && inputs.walter_guard_check_only != true
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Update Container App
+        if: steps.image.outputs.skip != 'true' && inputs.walter_guard_check_only != true
+        run: |
+          IMAGE="${{ steps.image.outputs.image }}"
+          TAG="${{ steps.image.outputs.tag }}"
+          TAG_SLUG=$(echo "${TAG}" | tr -cd 'a-z0-9' | cut -c1-5)
+          EPOCH_TAIL=$(date +%s | tail -c 6)
+          SUFFIX="${TAG_SLUG}${EPOCH_TAIL}"
+
+          # HEADROOM_VERSION makes /readyz report the exact release tag.
+          # docker.yml passes it as a build-arg, but the Dockerfile (owned by the
+          # session-persist feature, not this floor) never promotes it to a
+          # runtime ENV, so set it on the container app here. _version.py reads
+          # this env first (its existing override).
+          #
+          # HEADROOM_HOST=0.0.0.0: since v0.39.0 (upstream #3316) the image
+          # defaults to binding 127.0.0.1, which the ACA ingress cannot reach
+          # from outside the container -- every request then fails, and large
+          # ones come back as Envoy's "507 exceeded request buffer limit while
+          # retrying upstream". Pin the pre-0.39 bind here so the setting lives
+          # in the repo, not only on the container app. This leaves /v1/*
+          # unauthenticated unless HEADROOM_PROXY_TOKEN is also set.
+          # Remember what is live, for the rollback step below.
+          az containerapp show --name "${ACA_NAME}" --resource-group "${ACA_RG}" -o json > /tmp/aca-prev.json
+          echo "PREV_IMAGE=$(jq -r '.properties.template.containers[0].image' /tmp/aca-prev.json)" >> "$GITHUB_ENV"
+          echo "PREV_VERSION=$(jq -r '[.properties.template.containers[0].env[]? | select(.name == "HEADROOM_VERSION") | .value][0] // ""' /tmp/aca-prev.json)" >> "$GITHUB_ENV"
+          az containerapp update \
+            --name "${ACA_NAME}" \
+            --resource-group "${ACA_RG}" \
+            --image "${IMAGE}" \
+            --revision-suffix "${SUFFIX}" \
+            --set-env-vars "HEADROOM_VERSION=${TAG}" "HEADROOM_HOST=0.0.0.0"
+
+          echo "✓ Deployed ${IMAGE} → revision suffix ${SUFFIX}"
+
+      # Smoke check, then roll back on failure. In single-revision mode ACA only
+      # moves traffic once the new revision passes its TCP probes, so a revision
+      # that never binds is already contained -- but one that binds and is
+      # broken (not ready, wrong build, token gate missing) takes all traffic.
+      # Require /readyz ready on the deployed version, and an unauthenticated
+      # /v1/messages to be refused (401) so the proxy never ships open.
+      - name: Smoke check
+        id: smoke
+        if: steps.image.outputs.skip != 'true' && inputs.walter_guard_check_only != true
+        run: |
+          FQDN="$(az containerapp show --name "${ACA_NAME}" --resource-group "${ACA_RG}"             --query properties.configuration.ingress.fqdn -o tsv)"
+          TAG="${{ steps.image.outputs.tag }}"
+          # ponytail: 5 min budget; ACA's startup probe allows up to 240 s.
+          for i in $(seq 1 30); do
+            body="$(curl -s -m 10 "https://${FQDN}/readyz" || true)"
+            if printf '%s' "$body" | jq -e --arg v "$TAG" '.ready == true and .version == $v' >/dev/null 2>&1; then
+              code="$(curl -s -o /dev/null -w '%{http_code}' -m 15 -X POST "https://${FQDN}/v1/messages"                 -H 'content-type: application/json' -d '{}')"
+              if [ "$code" = "401" ]; then
+                echo "smoke ok: ${TAG} ready, unauthenticated /v1/messages -> 401"
+                exit 0
+              fi
+              echo "::error::${TAG} is ready but unauthenticated /v1/messages returned ${code}, not 401"
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "::error::/readyz never reported ready on ${TAG}; last body: ${body:0:300}"
+          exit 1
+
+      # Re-deploys the image and version that were live before this run, as a
+      # new revision. Leaves the run failed so the bad release stays visible.
+      - name: Roll back
+        if: failure() && steps.smoke.outcome == 'failure' && env.PREV_IMAGE != '' && inputs.walter_guard_check_only != true
+        run: |
+          az containerapp update             --name "${ACA_NAME}"             --resource-group "${ACA_RG}"             --image "${PREV_IMAGE}"             --revision-suffix "rb$(date +%s | tail -c 9)"             --set-env-vars "HEADROOM_VERSION=${PREV_VERSION}" "HEADROOM_HOST=0.0.0.0"
+          echo "::error::rolled back to ${PREV_IMAGE} (${PREV_VERSION}) after a failed smoke check"
