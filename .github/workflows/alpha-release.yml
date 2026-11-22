@@ -4,7 +4,10 @@ name: Alpha Release
 # model main-alpha always carries the fork overlay, so the no-op case is handled
 # upstream of here: sync.yml only force-pushes main-alpha when the rebuilt tree
 # actually changed (its idempotency guard), so a push to main-alpha means a real
-# change. The only skip kept here is "HEAD already tagged" (re-run safety).
+# change. Skips: "HEAD already tagged" (re-run safety), and "only fork tooling
+# changed since the previous alpha" (scripts/fork-alpha-skip.sh) -- sync.yml
+# also rebuilds on every fork-overlay push, and a CI/docs-only overlay edit
+# must not cut an alpha that auto-deploys and restarts Headroom.
 #
 # Version scheme: vX.Y.(Z+1)-alpha.N, where vX.Y.Z is the latest STABLE upstream
 # (headroomlabs-ai/headroom) release. N increments per release and resets to 1
@@ -53,6 +56,24 @@ jobs:
             echo "HEAD already has a release tag — skipping."
             exit 0
           fi
+
+          # Skip when everything changed since the previous alpha is fork
+          # tooling outside the image (workflows, docs, manifest, rebuild
+          # scripts): sync.yml now rebuilds main-alpha on every fork-overlay
+          # push, and an alpha here auto-deploys and restarts Headroom.
+          # Logic + exempt list: scripts/fork-alpha-skip.sh.
+          decision="$(bash scripts/fork-alpha-skip.sh HEAD)"
+          case "$decision" in
+            skip*)
+              prev="$(printf '%s\n' "$decision" | head -1 | cut -d' ' -f2)"
+              paths="$(printf '%s\n' "$decision" | tail -n +2 | paste -sd' ' -)"
+              echo "::notice title=Alpha skipped::only fork tooling changed since ${prev} (no image input): ${paths:-no file changes}"
+              exit 0
+              ;;
+            *)
+              echo "${decision}"
+              ;;
+          esac
 
           # base = upstream's latest STABLE release version, queried DIRECTLY
           # from upstream. Race-free vs the fork's mirrored tags, which
