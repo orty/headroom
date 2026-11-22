@@ -20,6 +20,15 @@ on:
         description: 'Image tag to deploy (empty = latest fork image)'
         required: false
         default: ''
+      walter_guard_max_minutes:
+        description: 'Max minutes to wait for running W.A.L.T.E.R. jobs before deploying anyway'
+        required: false
+        default: '75'
+      skip_walter_guard:
+        description: 'Emergency: deploy without waiting for W.A.L.T.E.R. jobs'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   id-token: write
@@ -105,6 +114,73 @@ jobs:
 
       - name: Azure Login (OIDC)
         if: steps.image.outputs.skip != 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # A deploy restarts the proxy, which breaks W.A.L.T.E.R. pipeline jobs
+      # mid-run (their model calls go through Headroom). Wait while one runs:
+      # (a) a Running walter-prod-job execution, or (b) W.A.L.T.E.R. traffic on
+      # Headroom in the last 5 min (Log Analytics ingestion lags a few minutes).
+      # A check the SP cannot run is dropped with a warning, never fails the
+      # deploy; at the cap, deploy anyway.
+      - name: Wait for W.A.L.T.E.R. jobs
+        if: steps.image.outputs.skip != 'true' && inputs.skip_walter_guard != true
+        env:
+          WALTER_GUARD_MAX_MINUTES: ${{ inputs.walter_guard_max_minutes || '75' }}
+          WALTER_SUB: a2672c72-a1eb-4c84-aec5-0b01fc14696f
+          WALTER_JOB: walter-prod-job
+          WALTER_JOB_RG: walter-job-rg
+          LA_WORKSPACE: 2cf1d2d4-cb02-4f04-9f67-9a5818575acb
+          AZURE_EXTENSION_USE_DYNAMIC_INSTALL: yes_without_prompt
+        run: |
+          set -uo pipefail
+          MAX="${WALTER_GUARD_MAX_MINUTES}"
+          case "$MAX" in ''|*[!0-9]*) echo "::warning::walter_guard_max_minutes '${MAX}' is not a number; using 75"; MAX=75 ;; esac
+          KQL='ContainerAppConsoleLogs_CL | where TimeGenerated > ago(5m) and ContainerAppName_s == "headroom" and Log_s has "account_tag" and Log_s has "app=1c66bdc9" | count'
+          use_jobs=1; use_logs=1
+          start="$(date +%s)"
+          while :; do
+            running=0; recent=0
+            if [ "$use_jobs" = 1 ]; then
+              if ! running="$(az containerapp job execution list -n "$WALTER_JOB" -g "$WALTER_JOB_RG" \
+                  --subscription "$WALTER_SUB" \
+                  --query "length([?properties.status=='Running'])" -o tsv 2>/tmp/walter-jobs.err)" \
+                 || ! [[ "$running" =~ ^[0-9]+$ ]]; then
+                echo "::warning::cannot list ${WALTER_JOB} executions; relying on Log Analytics only: $(head -c 300 /tmp/walter-jobs.err)"
+                use_jobs=0; running=0
+              fi
+            fi
+            if [ "$use_logs" = 1 ]; then
+              if ! recent="$(az monitor log-analytics query -w "$LA_WORKSPACE" \
+                  --analytics-query "$KQL" --query '[0].Count' -o tsv 2>/tmp/walter-logs.err)" \
+                 || ! [[ "$recent" =~ ^[0-9]+$ ]]; then
+                echo "::warning::cannot query Log Analytics for W.A.L.T.E.R. traffic: $(head -c 300 /tmp/walter-logs.err)"
+                use_logs=0; recent=0
+              fi
+            fi
+            if [ "$use_jobs" = 0 ] && [ "$use_logs" = 0 ]; then
+              echo "::warning::no W.A.L.T.E.R. check available; deploying without waiting"
+              break
+            fi
+            elapsed=$(( ($(date +%s) - start) / 60 ))
+            if [ "$running" -eq 0 ] && [ "$recent" -eq 0 ]; then
+              echo "W.A.L.T.E.R. idle after ${elapsed} min; deploying"
+              break
+            fi
+            if [ "$elapsed" -ge "$MAX" ]; then
+              echo "::warning::deploying anyway after ${elapsed} min: W.A.L.T.E.R. still busy (running executions: ${running}, calls in last 5 min: ${recent})"
+              break
+            fi
+            echo "waiting (${elapsed}/${MAX} min): running executions=${running}, W.A.L.T.E.R. calls in last 5 min=${recent}"
+            sleep 60
+          done
+
+      # The OIDC login above can expire during a long wait (~1 h); log in again.
+      - name: Azure Login (OIDC, after wait)
+        if: steps.image.outputs.skip != 'true' && inputs.skip_walter_guard != true
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
