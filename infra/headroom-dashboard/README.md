@@ -76,6 +76,7 @@ Services (managed identity) ────────┘       ├─ Easy Auth s
 - **GET only on browser routes, HEAD excluded**: FastAPI registers no HEAD for its GET routes, so a
   HEAD would reach Headroom's passthrough relay.
 - **Upstream `Host` is `headroom`**: ACA routes internal calls by Host.
+- **`/healthz`** on every hostname: a direct 200 from Envoy for the container probes, excluded from the access log.
 
 ## Entra ID (`entra-gateway-api.py`)
 
@@ -107,7 +108,8 @@ assigned too, or Entra refuses their token.
 | Image | `docker.io/envoyproxy/envoy:v1.32.3` |
 | Command | `envoy -c /etc/gateway/envoy.yaml --log-level warn` |
 | Ingress | external, target port 8080, `allowInsecure: false` |
-| Scale | 1 to 1 replica, 0.5 vCPU / 1 Gi |
+| Scale | 2 replicas (`REPLICAS`, default 2), 0.5 vCPU / 1 Gi each. A restart (failed probe, platform maintenance) then cuts half of the open streams, not all; Envoy and Easy Auth keep no state. |
+| Probes | HTTP `GET /healthz` on 8080, answered by Envoy itself (never forwarded, no token, not logged): startup 2 s x 30, readiness 5 s x 3, liveness 10 s x 3 (5 s timeout). Replaces ACA's default TCP probes; on 2026-11-21 the default liveness probe timed out 7 times and the single replica was restarted (~12 s of 5xx). |
 | Secrets | `headroom-proxy-token`: Key Vault reference to `headroom-prod-kv/secrets/headroom-proxy-token` (versionless), read with `headroom-gateway-identity` (attached to the app; Key Vault Secrets User on that secret only). `envoy-yaml`: the rendered config, written through az's `@file` expansion. The Caddy-era `caddyfile` secret stays for rollback; remove it by hand later. |
 | Env | `HEADROOM_PROXY_TOKEN=secretref:headroom-proxy-token` |
 | Volume | Secret volume with `envoy-yaml` at `/etc/gateway/envoy.yaml` |
