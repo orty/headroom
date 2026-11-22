@@ -139,9 +139,10 @@ features:
   # holds the same commit, but the replay filter (--cherry-pick against
   # upstream/main) drops it by patch-id, so it is carried by PR number here.
   # Retired automatically once a release base contains it.
+  # Retired automatically 2026-11-22: headroomlabs-ai/headroom#4865 merged as dffc4dcc, released in v0.45.0.
   - branch: carry/headroom-4865-credential-log-redaction
     upstream_pr: headroomlabs-ai/headroom#4865
-    active: true
+    active: false
   # Part 2: the four follow-up hardening commits (secret-word redaction,
   # HEADROOM_LOG_LEVEL=trace, subscription token fingerprint + opt-out, header
   # allow-list), cherry-picked onto upstream v0.44.0. Not upstream PRs: set
