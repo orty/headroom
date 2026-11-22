@@ -4,7 +4,8 @@ name: Deploy to Azure Container Apps
 # published directly) so the Docker image is guaranteed to exist.
 #
 # Image routing:
-# - Fork pre-release tag (contains -alpha/-beta/-rc): ghcr.io/orty/headroom:<tag>
+# - Fork pre-release tag (contains -alpha/-beta/-rc): $FORK_IMAGE:<tag>
+#   (repo variable FORK_IMAGE, else ghcr.io/orty/headroom)
 # - Stable mirrored tag (e.g. v0.26.0): ghcr.io/headroomlabs-ai/headroom:<tag>
 #
 # REQUIRED SECRETS:
@@ -46,7 +47,8 @@ permissions:
 env:
   ACA_NAME: headroom
   ACA_RG: RG-SAR
-  FORK_IMAGE: ghcr.io/orty/headroom
+  # Repo variable FORK_IMAGE (e.g. headroomprodacr.azurecr.io/headroom) wins.
+  FORK_IMAGE: ${{ vars.FORK_IMAGE || 'ghcr.io/orty/headroom' }}
   UPSTREAM_IMAGE: ghcr.io/headroomlabs-ai/headroom
 
 jobs:
@@ -146,7 +148,7 @@ jobs:
           WALTER_GUARD_MAX_MINUTES: ${{ inputs.walter_guard_max_minutes || '75' }}
           WALTER_GUARD_IDLE_MINUTES: ${{ inputs.walter_guard_idle_minutes || '5' }}
           CHECK_ONLY: ${{ inputs.walter_guard_check_only == true }}
-          LA_WORKSPACE: 2cf1d2d4-cb02-4f04-9f67-9a5818575acb
+          LA_WORKSPACE: ${{ vars.LA_WORKSPACE || '2cf1d2d4-cb02-4f04-9f67-9a5818575acb' }}
           WALTER_APP: 1c66bdc9
         run: |
           set -uo pipefail
