@@ -26,6 +26,10 @@ on:
 
 env:
   REGISTRY: ghcr.io
+  # Production images are also published to ACR, which the headroom container
+  # app pulls from with its managed identity. Same tags, same digest.
+  ACR_NAME: headroomprodacr
+  ACR_REGISTRY: headroomprodacr.azurecr.io
 
 permissions:
   contents: read
@@ -216,6 +220,9 @@ jobs:
     needs: docker-build
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    # OIDC subject repo:<owner>/headroom:environment:acr-push is the only one
+    # federated to the github-headroom-acr-push app (AcrPush on the registry).
+    environment: acr-push
     strategy:
       fail-fast: false
       # ponytail: matches the trimmed docker-build matrix (root variant only).
@@ -260,6 +267,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # No ACR login, no release: a failure here fails the build, so a
+      # published release never lacks its ACR image.
+      - name: Azure Login (OIDC, ACR push)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.ACR_PUSH_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to ACR
+        run: az acr login --name "${ACR_NAME}"
+
       - name: Download per-arch digests for this variant
         uses: actions/download-artifact@v8
         with:
@@ -274,7 +293,11 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image_name }}
+          # first_tag below may land on either registry: both are logged in
+          # and hold the same index digest; cosign still signs the ghcr ref.
+          images: |
+            ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image_name }}
+            ${{ env.ACR_REGISTRY }}/headroom
           tags: |
             type=ref,event=branch,enable=${{ inputs.enable_ref_tags != 'false' && github.event_name != 'release' }},suffix=${{ matrix.variant.name != '' && format('-{0}', matrix.variant.name) || '' }}
             type=ref,event=pr,enable=${{ inputs.enable_ref_tags != 'false' && github.event_name != 'release' }},suffix=${{ matrix.variant.name != '' && format('-{0}', matrix.variant.name) || '' }}
@@ -306,7 +329,9 @@ jobs:
             digest_refs+=("${IMAGE}@sha256:${digest}")
           done
 
-          # Build `--tag` args from the metadata-action JSON output.
+          # Build `--tag` args from the metadata-action JSON output. Tags
+          # cover both registries; imagetools copies the per-arch manifests
+          # and blobs from ghcr into ACR, so the index digest is identical.
           # Empty tags array is valid (PR builds without ref-tags
           # enabled emit nothing); skip manifest creation in that case.
           tag_args=()
