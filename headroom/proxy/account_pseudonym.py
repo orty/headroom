@@ -80,7 +80,10 @@ def log_account_tag(headers: Mapping[str, str], body: Any, request_id: str) -> N
     """Log one ``account_tag`` INFO line for a request. Never raises."""
     try:
         gateway_user = headers.get("x-headroom-user")
-        route = "gateway" if gateway_user else "legacy"
+        principal = headers.get("x-headroom-principal")
+        app = headers.get("x-headroom-app")
+        # App-only tokens carry no user claim; the gateway still sets principal and app.
+        route = "gateway" if gateway_user or principal or app else "legacy"
         ip = None
         if route == "legacy":
             ip = headers.get("x-envoy-external-address")
@@ -89,9 +92,11 @@ def log_account_tag(headers: Mapping[str, str], body: Any, request_id: str) -> N
                 ip = forwarded.split(",")[0]
         tag = account_tag(body)
         logger.info(
-            "account_tag route=%s user=%s acct=%s dev=%s ip=%s request_id=%s",
+            "account_tag route=%s user=%s principal=%s app=%s acct=%s dev=%s ip=%s request_id=%s",
             route,
             _log_value(gateway_user),
+            _log_value(principal),
+            _log_value(app),
             tag.get("acct", "-"),
             tag.get("dev", "-"),
             _log_value(ip),
