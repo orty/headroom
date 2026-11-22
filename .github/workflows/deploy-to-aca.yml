@@ -29,6 +29,15 @@ on:
         type: boolean
         required: false
         default: false
+      walter_guard_idle_minutes:
+        description: 'W.A.L.T.E.R. counts as busy if it called Headroom in the last N minutes (2-30)'
+        required: false
+        default: '5'
+      walter_guard_check_only:
+        description: 'Dry run: log in, run the W.A.L.T.E.R. guard query once, print busy/idle, deploy nothing'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   id-token: write
@@ -121,66 +130,65 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       # A deploy restarts the proxy, which breaks W.A.L.T.E.R. pipeline jobs
-      # mid-run (their model calls go through Headroom). Wait while one runs:
-      # (a) a Running walter-prod-job execution, or (b) W.A.L.T.E.R. traffic on
-      # Headroom in the last 5 min (Log Analytics ingestion lags a few minutes).
-      # A check the SP cannot run is dropped with a warning, never fails the
-      # deploy; at the cap, deploy anyway.
+      # mid-run (their model calls go through Headroom). Wait while W.A.L.T.E.R.
+      # has called Headroom in the last IDLE minutes, as seen by the gateway's
+      # Envoy access log (headroom-dashboard, event gateway_access, field app =
+      # X-Headroom-App). The gateway logs every route, including the
+      # count_tokens heartbeat W.A.L.T.E.R. sends every 120 s during a run.
+      # A query the SP cannot run is dropped with a warning, never fails the
+      # deploy; at the cap, deploy anyway. walter_guard_check_only runs the
+      # query once and stops (there, a failed query fails the run).
       - name: Wait for W.A.L.T.E.R. jobs
-        if: steps.image.outputs.skip != 'true' && inputs.skip_walter_guard != true
+        if: >-
+          steps.image.outputs.skip != 'true' &&
+          (inputs.walter_guard_check_only == true || inputs.skip_walter_guard != true)
         env:
           WALTER_GUARD_MAX_MINUTES: ${{ inputs.walter_guard_max_minutes || '75' }}
-          WALTER_SUB: a2672c72-a1eb-4c84-aec5-0b01fc14696f
-          WALTER_JOB: walter-prod-job
-          WALTER_JOB_RG: walter-job-rg
+          WALTER_GUARD_IDLE_MINUTES: ${{ inputs.walter_guard_idle_minutes || '5' }}
+          CHECK_ONLY: ${{ inputs.walter_guard_check_only == true }}
           LA_WORKSPACE: 2cf1d2d4-cb02-4f04-9f67-9a5818575acb
-          AZURE_EXTENSION_USE_DYNAMIC_INSTALL: yes_without_prompt
+          WALTER_APP: 1c66bdc9
         run: |
           set -uo pipefail
           MAX="${WALTER_GUARD_MAX_MINUTES}"
           case "$MAX" in ''|*[!0-9]*) echo "::warning::walter_guard_max_minutes '${MAX}' is not a number; using 75"; MAX=75 ;; esac
-          KQL='ContainerAppConsoleLogs_CL | where TimeGenerated > ago(5m) and ContainerAppName_s == "headroom" and Log_s has "account_tag" and Log_s has "app=1c66bdc9" | count'
-          use_jobs=1; use_logs=1
+          IDLE="${WALTER_GUARD_IDLE_MINUTES}"
+          if ! [[ "$IDLE" =~ ^[0-9]+$ ]] || [ "$IDLE" -lt 2 ] || [ "$IDLE" -gt 30 ]; then
+            echo "::error::walter_guard_idle_minutes '${IDLE}' must be an integer from 2 to 30"
+            exit 1
+          fi
+          KQL="ContainerAppConsoleLogs_CL | where TimeGenerated > ago(${IDLE}m) and ContainerAppName_s == \"headroom-dashboard\" and Log_s has \"gateway_access\" and Log_s has \"${WALTER_APP}\" | count"
           start="$(date +%s)"
           while :; do
-            running=0; recent=0
-            if [ "$use_jobs" = 1 ]; then
-              if ! running="$(az containerapp job execution list -n "$WALTER_JOB" -g "$WALTER_JOB_RG" \
-                  --subscription "$WALTER_SUB" \
-                  --query "length([?properties.status=='Running'])" -o tsv 2>/tmp/walter-jobs.err)" \
-                 || ! [[ "$running" =~ ^[0-9]+$ ]]; then
-                echo "::warning::cannot list ${WALTER_JOB} executions; relying on Log Analytics only: $(head -c 300 /tmp/walter-jobs.err)"
-                use_jobs=0; running=0
+            if ! recent="$(az monitor log-analytics query -w "$LA_WORKSPACE"                 --analytics-query "$KQL" --query '[0].Count' -o tsv 2>/tmp/walter-logs.err)"                || ! [[ "$recent" =~ ^[0-9]+$ ]]; then
+              if [ "$CHECK_ONLY" = true ]; then
+                echo "::error::check-only: cannot query Log Analytics for W.A.L.T.E.R. traffic: $(head -c 300 /tmp/walter-logs.err)"
+                exit 1
               fi
+              echo "::warning::cannot query Log Analytics for W.A.L.T.E.R. traffic; deploying without waiting: $(head -c 300 /tmp/walter-logs.err)"
+              break
             fi
-            if [ "$use_logs" = 1 ]; then
-              if ! recent="$(az monitor log-analytics query -w "$LA_WORKSPACE" \
-                  --analytics-query "$KQL" --query '[0].Count' -o tsv 2>/tmp/walter-logs.err)" \
-                 || ! [[ "$recent" =~ ^[0-9]+$ ]]; then
-                echo "::warning::cannot query Log Analytics for W.A.L.T.E.R. traffic: $(head -c 300 /tmp/walter-logs.err)"
-                use_logs=0; recent=0
-              fi
-            fi
-            if [ "$use_jobs" = 0 ] && [ "$use_logs" = 0 ]; then
-              echo "::warning::no W.A.L.T.E.R. check available; deploying without waiting"
+            if [ "$CHECK_ONLY" = true ]; then
+              state=idle; [ "$recent" -gt 0 ] && state=busy
+              echo "check-only: W.A.L.T.E.R. ${state} (gateway calls in last ${IDLE} min: ${recent})"
               break
             fi
             elapsed=$(( ($(date +%s) - start) / 60 ))
-            if [ "$running" -eq 0 ] && [ "$recent" -eq 0 ]; then
+            if [ "$recent" -eq 0 ]; then
               echo "W.A.L.T.E.R. idle after ${elapsed} min; deploying"
               break
             fi
             if [ "$elapsed" -ge "$MAX" ]; then
-              echo "::warning::deploying anyway after ${elapsed} min: W.A.L.T.E.R. still busy (running executions: ${running}, calls in last 5 min: ${recent})"
+              echo "::warning::deploying anyway after ${elapsed} min: W.A.L.T.E.R. still busy (gateway calls in last ${IDLE} min: ${recent})"
               break
             fi
-            echo "waiting (${elapsed}/${MAX} min): running executions=${running}, W.A.L.T.E.R. calls in last 5 min=${recent}"
+            echo "waiting (${elapsed}/${MAX} min): W.A.L.T.E.R. gateway calls in last ${IDLE} min=${recent}"
             sleep 60
           done
 
       # The OIDC login above can expire during a long wait (~1 h); log in again.
       - name: Azure Login (OIDC, after wait)
-        if: steps.image.outputs.skip != 'true' && inputs.skip_walter_guard != true
+        if: steps.image.outputs.skip != 'true' && inputs.skip_walter_guard != true && inputs.walter_guard_check_only != true
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -188,7 +196,7 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Update Container App
-        if: steps.image.outputs.skip != 'true'
+        if: steps.image.outputs.skip != 'true' && inputs.walter_guard_check_only != true
         run: |
           IMAGE="${{ steps.image.outputs.image }}"
           TAG="${{ steps.image.outputs.tag }}"
@@ -230,7 +238,7 @@ jobs:
       # /v1/messages to be refused (401) so the proxy never ships open.
       - name: Smoke check
         id: smoke
-        if: steps.image.outputs.skip != 'true'
+        if: steps.image.outputs.skip != 'true' && inputs.walter_guard_check_only != true
         run: |
           FQDN="$(az containerapp show --name "${ACA_NAME}" --resource-group "${ACA_RG}"             --query properties.configuration.ingress.fqdn -o tsv)"
           TAG="${{ steps.image.outputs.tag }}"
@@ -254,7 +262,7 @@ jobs:
       # Re-deploys the image and version that were live before this run, as a
       # new revision. Leaves the run failed so the bad release stays visible.
       - name: Roll back
-        if: failure() && steps.smoke.outcome == 'failure' && env.PREV_IMAGE != ''
+        if: failure() && steps.smoke.outcome == 'failure' && env.PREV_IMAGE != '' && inputs.walter_guard_check_only != true
         run: |
           az containerapp update             --name "${ACA_NAME}"             --resource-group "${ACA_RG}"             --image "${PREV_IMAGE}"             --revision-suffix "rb$(date +%s | tail -c 9)"             --set-env-vars "HEADROOM_VERSION=${PREV_VERSION}" "HEADROOM_HOST=0.0.0.0"
           echo "::error::rolled back to ${PREV_IMAGE} (${PREV_VERSION}) after a failed smoke check"
